@@ -2,13 +2,16 @@ package main
 
 import (
 	"log"
+	"strconv"
+	"strings"
 	"os/exec"
 	"time"
 )
 
 const (
-	healthInterval = 60 * time.Second
+	healthInterval = 10 * time.Second
 	healthFailures = 2 // 连续失败几次才判定掉线，避免网络抖动误杀
+	healthTimeout  = 6 * time.Second
 )
 
 // WatchHealth 周期检查每条隧道是否还能出网，掉线的自动换节点重连。
@@ -21,7 +24,7 @@ func (m *Manager) WatchHealth() {
 			if t.Status != "up" {
 				continue
 			}
-			if tunnelAlive(t.nsName()) {
+			if m.tunnelHealthy(t) {
 				fails[t.Slot] = 0
 				continue
 			}
@@ -39,11 +42,24 @@ func (m *Manager) WatchHealth() {
 	}
 }
 
-// tunnelAlive 在 netns 内做一次轻量探测。
-func tunnelAlive(ns string) bool {
-	cmd := exec.Command("ip", "netns", "exec", ns,
-		"curl", "-s", "--max-time", "10", "-o", "/dev/null", "http://api.ipify.org")
-	return cmd.Run() == nil
+// tunnelHealthy 判断隧道是否还真的走在 VPN 上。
+//
+// 只看"能不能出网"是不够的：netns 通过 veth 走母机 NAT，
+// openvpn 死掉后照样能出网，只是出口变回了母机 IP。
+// 所以要比对出口 IP 是否仍是建立隧道时拿到的那个。
+func (m *Manager) tunnelHealthy(t *Tunnel) bool {
+	out, err := exec.Command("ip", "netns", "exec", t.nsName(),
+		"curl", "-s", "--max-time", strconv.Itoa(int(healthTimeout.Seconds())),
+		"http://api.ipify.org").Output()
+	if err != nil {
+		return false
+	}
+	got := strings.TrimSpace(string(out))
+	if got == "" {
+		return false
+	}
+	// 出口 IP 变了说明 VPN 已经断开，流量退回了母机
+	return got == t.ExitIP
 }
 
 // reconnect 就地把一条隧道换到别的节点上，保持槽位与端口不变，
@@ -62,12 +78,21 @@ func (m *Manager) reconnect(t *Tunnel) {
 
 	go func() {
 		m.bringUp(t)
+		if t.Status != "up" {
+			return
+		}
 		// 出站 tag 跟着节点名走，换了节点就要把原来指向它的入站重新绑过去，
 		// 否则面板里的路由会指向一个已经不存在的出站。
-		if t.Status == "up" && t.Node.HostName != oldHost {
+		if t.Node.HostName != oldHost {
 			if err := m.rebind(oldHost, t); err != nil {
 				log.Printf("重连后同步 3x-ui 绑定失败: %v", err)
 			}
+			return
+		}
+		// 节点名没变也要重写一次出站：出口 IP 可能变了，
+		// 而且上一轮换节点时留下的绑定需要重新指回来。
+		if err := m.resync(t); err != nil {
+			log.Printf("重连后重写 3x-ui 出站失败: %v", err)
 		}
 	}()
 }

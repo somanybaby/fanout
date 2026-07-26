@@ -172,12 +172,28 @@ func (m *Manager) candidatesFor(first Node) []Node {
 		used[t.Node.HostName] = true
 	}
 
+	// 地区决定了备选范围，缺失时先从当前列表补一次，
+	// 否则会退化成"任意地区都算同区"。
+	region := first.CountryCode
+	if region == "" {
+		for _, n := range m.nodes {
+			if n.HostName == first.HostName {
+				region = n.CountryCode
+				break
+			}
+		}
+	}
+
 	out := []Node{first}
 	for _, n := range m.nodes {
 		if len(out) >= maxTries {
 			break
 		}
-		if used[n.HostName] || n.CountryCode != first.CountryCode {
+		if used[n.HostName] {
+			continue
+		}
+		// 地区实在拿不到时不做限制，总比连不上强
+		if region != "" && n.CountryCode != region {
 			continue
 		}
 		out = append(out, n)
@@ -245,4 +261,14 @@ func (m *Manager) rebind(oldHost string, t *Tunnel) error {
 		return nil
 	}
 	return x.Rebind(oldHost, t, m.Tunnels())
+}
+
+// resync 在节点没换但重连过之后，把 3x-ui 的出站配置刷新一遍。
+// 面板不可用时静默跳过，健康检查本身不应因此失败。
+func (m *Manager) resync(t *Tunnel) error {
+	x, err := DetectXUI()
+	if err != nil {
+		return nil
+	}
+	return x.ResyncOutbound(t, m.Tunnels())
 }

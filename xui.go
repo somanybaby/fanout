@@ -894,6 +894,7 @@ func (x *XUI) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) error {
 		return err
 	}
 	oldTag := sanitizeTag(oldHost)
+	newLabel := exitLabel(target)
 	for _, ib := range list {
 		if ib.BoundTo != oldTag {
 			continue
@@ -901,8 +902,90 @@ func (x *XUI) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) error {
 		if err := x.Bind(ib.Tag, target.Node.HostName, tunnels); err != nil {
 			return err
 		}
+		// 备注里带着旧出口的地区和 IP 尾段，换了节点要跟着改，否则名不副实
+		if renamed := renameExitSuffix(ib.Remark, newLabel); renamed != ib.Remark {
+			if err := x.renameInbound(ib.ID, renamed); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
+}
+
+// renameExitSuffix 把备注末尾的出口标签换成新的。
+// 备注形如 "线路A-KR-248"，只替换最后两段；认不出格式时原样返回。
+func renameExitSuffix(remark, newLabel string) string {
+	if remark == "" {
+		return remark
+	}
+	parts := strings.Split(remark, "-")
+	if len(parts) < 2 {
+		return remark
+	}
+	// 出口标签本身是 "地区-IP尾段" 两段，前面的是用户的原始备注
+	keep := parts[:len(parts)-2]
+	if len(keep) == 0 {
+		return newLabel
+	}
+	return strings.Join(keep, "-") + "-" + newLabel
+}
+
+// renameInbound 只改备注，其余配置原样写回。
+func (x *XUI) renameInbound(id int, remark string) error {
+	raw, err := x.rawInbound(id)
+	if err != nil {
+		return err
+	}
+	payload := map[string]any{
+		"enable":         raw["enable"],
+		"remark":         remark,
+		"listen":         fmt.Sprint(orEmpty(raw["listen"])),
+		"port":           int(toFloat(raw["port"])),
+		"protocol":       fmt.Sprint(raw["protocol"]),
+		"expiryTime":     0,
+		"total":          0,
+		"settings":       mustJSONField(raw["settings"]),
+		"streamSettings": mustJSONField(raw["streamSettings"]),
+		"sniffing":       mustJSONField(raw["sniffing"]),
+		"allocate":       mustJSON(map[string]any{}),
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	endpoint := fmt.Sprintf("%s/panel/api/inbounds/update/%d", x.base(), id)
+	req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+x.token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := x.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	blob, _ := io.ReadAll(resp.Body)
+	var envelope struct {
+		Success bool   `json:"success"`
+		Msg     string `json:"msg"`
+	}
+	if err := json.Unmarshal(blob, &envelope); err != nil {
+		return fmt.Errorf("解析改名响应失败: %s", strings.TrimSpace(string(blob)))
+	}
+	if !envelope.Success {
+		return fmt.Errorf("改名失败: %s", envelope.Msg)
+	}
+	return nil
+}
+
+// mustJSONField 兼容字段是对象或已编码字符串两种情况，统一输出字符串。
+func mustJSONField(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return mustJSON(v)
 }
 
 // isAllDigits 判断 tag 后缀是不是纯数字（早期用槽位号命名出站留下的遗留格式）。
@@ -916,4 +999,15 @@ func isAllDigits(s string) bool {
 		}
 	}
 	return true
+}
+
+// ResyncOutbound 重写某条隧道对应的出站配置。
+// 用于隧道原地重连（节点名没变）后刷新端口等信息。
+func (x *XUI) ResyncOutbound(t *Tunnel, tunnels []*Tunnel) error {
+	setting, testURL, err := x.loadXray()
+	if err != nil {
+		return err
+	}
+	x.syncOutbounds(setting, tunnels)
+	return x.saveXray(setting, testURL)
 }

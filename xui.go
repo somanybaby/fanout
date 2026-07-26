@@ -18,6 +18,7 @@ import (
 // 面板端口与 webBasePath 都是安装时随机生成的，这里从 x-ui 命令行读出来，
 // API token 同样由 `x-ui setting -getApiToken` 提供（没有时它会自动生成一个）。
 type XUI struct {
+	Host     string `json:"host"`
 	Port     int    `json:"port"`
 	BasePath string `json:"base_path"`
 	Scheme   string `json:"scheme"`
@@ -25,12 +26,17 @@ type XUI struct {
 	client   *http.Client
 }
 
-// base 返回面板的本地访问前缀。
+// base 返回访问面板用的前缀。
 func (x *XUI) base() string {
-	return fmt.Sprintf("%s://127.0.0.1:%d%s", x.Scheme, x.Port, x.BasePath)
+	return fmt.Sprintf("%s://%s:%d%s", x.Scheme, x.Host, x.Port, x.BasePath)
 }
 
-const xuiBinary = "/usr/local/x-ui/x-ui"
+const (
+	// 面板主程序，用来读设置和取 API token
+	xuiBinary = "/usr/local/x-ui/x-ui"
+	// 交互式管理脚本，第 11 项会打印面板的对外访问地址
+	xuiMenu = "/usr/bin/x-ui"
+)
 
 // 每次调用 `x-ui setting -getApiToken` 面板都会新生成一个 token，
 // 所以进程内缓存复用，避免把面板的 token 列表撑爆。
@@ -48,7 +54,34 @@ var (
 	reXUISSL = regexp.MustCompile(`(?i)panel is secure with ssl`)
 	// 兜底：证书路径非空也说明启用了 TLS
 	reXUICert = regexp.MustCompile(`(?m)^cert:\s*\S+`)
+	// x-ui 菜单第 11 项打印的 Access URL，绑了域名时给的是域名而不是 IP
+	reXUIAccessURL = regexp.MustCompile(`Access URL:\s*(https?)://([^:/\s]+):(\d+)(\S*)`)
+	reANSI         = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 )
+
+// panelAccess 从 `x-ui` 的「View Current Settings」里取面板地址。
+//
+// 那段逻辑已经处理好了绑定域名的情况：有证书就用证书里的域名，没有才退回公网 IP。
+// 比我们自己拼 127.0.0.1 靠谱，尤其是面板启用了 TLS 时证书不会签给回环地址。
+func panelAccess() (scheme, host string, ok bool) {
+	cmd := exec.Command(xuiMenu)
+	cmd.Stdin = strings.NewReader("11\n\n0\n")
+	out, err := cmd.Output()
+	if err != nil && len(out) == 0 {
+		return "", "", false
+	}
+	// 输出带 ANSI 颜色码，先剥掉再匹配
+	m := reXUIAccessURL.FindStringSubmatch(stripANSI(string(out)))
+	if m == nil {
+		return "", "", false
+	}
+	return m[1], m[2], true
+}
+
+// stripANSI 去掉终端颜色控制码。
+func stripANSI(s string) string {
+	return reANSI.ReplaceAllString(s, "")
+}
 
 // DetectXUI 探测本机 3x-ui。未安装或未运行时返回错误。
 func DetectXUI() (*XUI, error) {
@@ -63,10 +96,14 @@ func DetectXUI() (*XUI, error) {
 	text := string(out)
 
 	scheme := "http"
-	if reXUISSL.MatchString(text) {
+	host := "127.0.0.1"
+	// 优先信 x-ui 自己给出的地址（可能是域名）
+	if sc, h, ok := panelAccess(); ok {
+		scheme, host = sc, h
+	} else if reXUISSL.MatchString(text) {
 		scheme = "https"
-	} else if out, err := exec.Command(xuiBinary, "setting", "-getCert").Output(); err == nil {
-		if reXUICert.MatchString(string(out)) {
+	} else if certOut, err := exec.Command(xuiBinary, "setting", "-getCert").Output(); err == nil {
+		if reXUICert.MatchString(string(certOut)) {
 			scheme = "https"
 		}
 	}
@@ -83,6 +120,7 @@ func DetectXUI() (*XUI, error) {
 	defer cachedTokenMu.Unlock()
 	if cachedToken != "" {
 		return &XUI{
+			Host:     host,
 			Port:     port,
 			BasePath: strings.TrimSuffix(bm[1], "/"),
 			Scheme:   scheme,
@@ -104,6 +142,7 @@ func DetectXUI() (*XUI, error) {
 
 	cachedToken = token
 	return &XUI{
+		Host:     host,
 		Port:     port,
 		BasePath: strings.TrimSuffix(bm[1], "/"),
 		Scheme:   scheme,

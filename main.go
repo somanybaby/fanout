@@ -193,6 +193,7 @@ func apiXUIStatus(w http.ResponseWriter, r *http.Request) {
 		"port":      x.Port,
 		"base_path": x.BasePath,
 		"scheme":    x.Scheme,
+		"host":      x.Host,
 	})
 }
 

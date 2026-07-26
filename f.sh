@@ -144,6 +144,43 @@ reset_basepath() {
   echo -e "  ${G}新路径: /${bp}/${N}"
 }
 
+ipv6_state() {
+  local a d
+  a=$(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null || echo 0)
+  d=$(sysctl -n net.ipv6.conf.default.disable_ipv6 2>/dev/null || echo 0)
+  [[ "$a" == 1 && "$d" == 1 ]] && echo disabled || echo enabled
+}
+
+toggle_ipv6() {
+  local conf=/etc/sysctl.d/99-fanout-ipv6.conf
+  echo
+  if [[ $(ipv6_state) == disabled ]]; then
+    read -rp "  当前已禁用 IPv6，要重新启用吗？[y/N]: " yes
+    [[ ${yes,,} == y ]] || { echo "  已取消"; return; }
+    rm -f "$conf"
+    sysctl -qw net.ipv6.conf.all.disable_ipv6=0
+    sysctl -qw net.ipv6.conf.default.disable_ipv6=0
+    sysctl -qw net.ipv6.conf.lo.disable_ipv6=0
+    echo -e "  ${G}已重新启用 IPv6${N}"
+    return
+  fi
+
+  echo -e "  ${D}母机有全局 IPv6 时，没走隧道的流量可能从 IPv6 出去，暴露真实地址。${N}"
+  read -rp "  确认禁用整机 IPv6？[y/N]: " yes
+  [[ ${yes,,} == y ]] || { echo "  已取消"; return; }
+
+  cat > "$conf" <<EOF
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+net.ipv6.conf.lo.disable_ipv6 = 1
+EOF
+  sysctl -qw net.ipv6.conf.all.disable_ipv6=1
+  sysctl -qw net.ipv6.conf.default.disable_ipv6=1
+  sysctl -qw net.ipv6.conf.lo.disable_ipv6=1
+  systemctl restart "$SERVICE" 2>/dev/null
+  echo -e "  ${G}已禁用 IPv6（重启后依然生效）${N}"
+}
+
 do_update() {
   local arch goarch tmp
   arch=$(uname -m)

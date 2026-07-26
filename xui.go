@@ -475,6 +475,7 @@ func (x *XUI) syncOutbounds(setting map[string]any, tunnels []*Tunnel) {
 		}
 		tag, _ := m["tag"].(string)
 		if !strings.HasPrefix(tag, xuiTagPrefix) {
+			forceIPv4(m)
 			kept = append(kept, ob)
 		}
 	}
@@ -1010,4 +1011,20 @@ func (x *XUI) ResyncOutbound(t *Tunnel, tunnels []*Tunnel) error {
 	}
 	x.syncOutbounds(setting, tunnels)
 	return x.saveXray(setting, testURL)
+}
+
+// forceIPv4 让直连类出站只走 IPv4。
+//
+// 隧道内没有 IPv6，但没被路由规则匹配上的流量会走 direct 出站直连；
+// 母机有全局 IPv6 时这部分会从 IPv6 出去，暴露服务器真实地址。
+func forceIPv4(outbound map[string]any) {
+	if proto, _ := outbound["protocol"].(string); proto != "freedom" {
+		return
+	}
+	settings, _ := outbound["settings"].(map[string]any)
+	if settings == nil {
+		settings = map[string]any{}
+		outbound["settings"] = settings
+	}
+	settings["domainStrategy"] = "UseIPv4"
 }

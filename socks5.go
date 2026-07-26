@@ -80,6 +80,9 @@ func socksHandshake(c net.Conn) error {
 
 var errCmdNotSupported = errors.New("仅支持 CONNECT")
 
+// errIPv6NotSupported 表示拒绝 IPv6 目标：隧道内只有 IPv4。
+var errIPv6NotSupported = errors.New("隧道内不支持 IPv6")
+
 func socksReadRequest(c net.Conn) (string, error) {
 	head := make([]byte, 4)
 	if _, err := io.ReadFull(c, head); err != nil {
@@ -98,11 +101,12 @@ func socksReadRequest(c net.Conn) (string, error) {
 		}
 		host = net.IP(b).String()
 	case atypIPv6:
+		// 隧道内没有 IPv6 路由，放行只会让这条连接绕开隧道
 		b := make([]byte, 16)
 		if _, err := io.ReadFull(c, b); err != nil {
 			return "", err
 		}
-		host = net.IP(b).String()
+		return "", errIPv6NotSupported
 	case atypDomain:
 		l := make([]byte, 1)
 		if _, err := io.ReadFull(c, l); err != nil {

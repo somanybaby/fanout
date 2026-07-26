@@ -40,7 +40,9 @@ func dialerInNetns(nsName string) func(network, addr string) (net.Conn, error) {
 				return
 			}
 
-			conn, dialErr := net.Dial(network, addr)
+			// 隧道内只有 IPv4 路由。不限定的话 net.Dial 可能选中 AAAA 记录，
+			// 那条连接会绕开隧道从母机的 IPv6 出去，暴露真实地址。
+			conn, dialErr := net.Dial(forceIPv4Network(network), addr)
 
 			if err := unix.Setns(int(origin.Fd()), unix.CLONE_NEWNET); err != nil {
 				if conn != nil {
@@ -57,4 +59,15 @@ func dialerInNetns(nsName string) func(network, addr string) (net.Conn, error) {
 		r := <-ch
 		return r.conn, r.err
 	}
+}
+
+// forceIPv4Network 把 tcp/udp 收敛成 tcp4/udp4，已经指定版本的原样返回。
+func forceIPv4Network(network string) string {
+	switch network {
+	case "tcp":
+		return "tcp4"
+	case "udp":
+		return "udp4"
+	}
+	return network
 }

@@ -84,14 +84,19 @@ systemctl is-active --quiet fanout && echo "      服务运行中" || {
   exit 1
 }
 
-# 口令由 fanout 首次启动时生成，等它写出来
+# 口令与访问路径由 fanout 首次启动时生成，等它写出来
 for _ in $(seq 1 10); do
-  [[ -s "${WORK_DIR}/password" ]] && break
+  [[ -s "${WORK_DIR}/password" && -s "${WORK_DIR}/basepath" ]] && break
   sleep 1
 done
 
 IP=$(curl -s --max-time 8 http://api.ipify.org || echo "<本机IP>")
+BP=$(cat "${WORK_DIR}/basepath" 2>/dev/null || true)
 echo
-echo "  管理界面  http://${IP}:${WEB_PORT}"
-echo "  访问口令  $(cat "${WORK_DIR}/password" 2>/dev/null || echo '见 '"${WORK_DIR}"'/password')"
+echo "  管理界面  http://${IP}:${WEB_PORT}/${BP}/"
+echo "  访问口令  $(cat "${WORK_DIR}/password" 2>/dev/null || echo "见 ${WORK_DIR}/password")"
+echo
+echo "  路径和口令都是随机生成的，也可以随时查看："
+echo "    cat ${WORK_DIR}/basepath"
+echo "    cat ${WORK_DIR}/password"
 echo

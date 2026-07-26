@@ -372,8 +372,8 @@ $('#cloneBtn').onclick = async e => {
   if(!confirm('以「' + (tpl ? tpl.remark : tplId) + '」为模板复制 ' + up.length + ' 个入站：\n\n' + names)) return;
   e.target.disabled = true; e.target.textContent = '复制中';
   try{
-    const slots = up.map(t => t.slot).join(',');
-    const d = await api('/api/xui/clone?id='+tplId+'&slots='+slots, {method:'POST'});
+    const hosts = up.map(t => encodeURIComponent(t.node.hostname)).join(',');
+    const d = await api('/api/xui/clone?id='+tplId+'&hosts='+hosts, {method:'POST'});
     alert('已创建入站端口: ' + d.created.join(', '));
     await loadInbounds();
   }catch(err){ alert('复制失败: ' + err.message); }

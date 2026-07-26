@@ -221,8 +221,16 @@ func (x *XUI) saveXray(setting map[string]any, testURL string) error {
 	if testURL != "" {
 		form.Set("outboundTestUrl", testURL)
 	}
-	_, err = x.post("panel/api/xray/update", form)
-	return err
+	if _, err := x.post("panel/api/xray/update", form); err != nil {
+		return err
+	}
+
+	// 只写模板不够：面板要重载 Xray 才会用新的 outbounds 与 routing 生成运行配置，
+	// 否则路由改动看起来保存成功了，实际流量还按旧规则走。
+	if _, err := x.post("panel/api/server/restartXrayService", nil); err != nil {
+		return fmt.Errorf("配置已保存但重载 Xray 失败: %w", err)
+	}
+	return nil
 }
 
 
@@ -492,15 +500,15 @@ func (x *XUI) syncOutbounds(setting map[string]any, tunnels []*Tunnel) {
 //
 // 复制时必须换掉端口、备注，以及客户端的 id/email —— 这些在面板里要求唯一。
 // 返回新建入站的端口列表。
-func (x *XUI) CloneToTunnels(templateID int, slots []int, tunnels []*Tunnel) ([]int, error) {
+func (x *XUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) ([]int, error) {
 	raw, err := x.rawInbound(templateID)
 	if err != nil {
 		return nil, err
 	}
 
-	bySlot := map[int]*Tunnel{}
+	byHost := map[string]*Tunnel{}
 	for _, t := range tunnels {
-		bySlot[t.Slot] = t
+		byHost[t.Node.HostName] = t
 	}
 
 	used, err := x.usedPorts()
@@ -514,8 +522,8 @@ func (x *XUI) CloneToTunnels(templateID int, slots []int, tunnels []*Tunnel) ([]
 	}
 
 	created := []int{}
-	for _, slot := range slots {
-		t := bySlot[slot]
+	for _, host := range hosts {
+		t := byHost[host]
 		if t == nil || t.Status != "up" {
 			continue
 		}
@@ -526,7 +534,7 @@ func (x *XUI) CloneToTunnels(templateID int, slots []int, tunnels []*Tunnel) ([]
 		}
 		used[port] = true
 
-		clone, err := cloneInboundPayload(raw, port, slot, t)
+		clone, err := cloneInboundPayload(raw, port, t)
 		if err != nil {
 			return created, err
 		}
@@ -590,17 +598,17 @@ func inboundTagOf(port int, template map[string]any) string {
 }
 
 // cloneInboundPayload 按模板构造一个新入站的提交体。
-func cloneInboundPayload(tpl map[string]any, port, slot int, t *Tunnel) (map[string]any, error) {
+func cloneInboundPayload(tpl map[string]any, port int, t *Tunnel) (map[string]any, error) {
 	settings, err := asObject(tpl["settings"])
 	if err != nil {
 		return nil, fmt.Errorf("解析模板 settings 失败: %w", err)
 	}
 
 	base := strings.TrimSpace(fmt.Sprint(tpl["remark"]))
-	if base == "" {
-		base = fmt.Sprintf("inbound-%v", tpl["port"])
+	label := exitLabel(t)
+	if base != "" {
+		label = base + "-" + label
 	}
-	label := fmt.Sprintf("%s-%s", base, exitLabel(t))
 
 	// 客户端不重新生成：建成空入站后用 attach 把模板的客户端挂过来，
 	// 这样同一套 UUID 能走所有出口，客户端那边只改端口即可。
@@ -630,12 +638,27 @@ func cloneInboundPayload(tpl map[string]any, port, slot int, t *Tunnel) (map[str
 	}, nil
 }
 
-// exitLabel 给复制出来的入站起一个能看出出口的后缀。
+// exitLabel 给复制出来的入站起个好认的名字：地区 + 出口 IP 末段。
+// 同一地区可能有多条隧道，带上末段才能区分。
 func exitLabel(t *Tunnel) string {
-	if t.ExitIP != "" {
-		return t.ExitIP
+	region := t.Node.CountryCode
+	if region == "" {
+		region = t.Node.Country
 	}
-	return fmt.Sprintf("slot%d", t.Slot)
+
+	suffix := t.Node.HostName
+	if t.ExitIP != "" {
+		if i := strings.LastIndex(t.ExitIP, "."); i >= 0 {
+			suffix = t.ExitIP[i+1:]
+		} else {
+			suffix = t.ExitIP
+		}
+	}
+
+	if region == "" {
+		return suffix
+	}
+	return region + "-" + suffix
 }
 
 // asObject 兼容字段是对象或是被编码成字符串的两种情况。

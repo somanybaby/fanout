@@ -10,10 +10,12 @@ import (
 // persistedTunnel 是隧道在磁盘上的形态。
 // 只存重建所需的信息，运行态（netns、进程、监听）重启后重新建立。
 type persistedTunnel struct {
-	Slot     int    `json:"slot"`
-	Port     int    `json:"port"`
-	HostName string `json:"hostname"`
-	Config   string `json:"config"`
+	Slot        int    `json:"slot"`
+	Port        int    `json:"port"`
+	HostName    string `json:"hostname"`
+	CountryCode string `json:"country_code"`
+	Country     string `json:"country"`
+	Config      string `json:"config"`
 }
 
 type persistedState struct {
@@ -30,10 +32,12 @@ func (m *Manager) saveState() error {
 			continue
 		}
 		st.Tunnels = append(st.Tunnels, persistedTunnel{
-			Slot:     t.Slot,
-			Port:     t.Port,
-			HostName: t.Node.HostName,
-			Config:   t.Node.Config,
+			Slot:        t.Slot,
+			Port:        t.Port,
+			HostName:    t.Node.HostName,
+			CountryCode: t.Node.CountryCode,
+			Country:     t.Node.Country,
+			Config:      t.Node.Config,
 		})
 	}
 
@@ -73,7 +77,12 @@ func (m *Manager) restoreState() (int, error) {
 	for _, p := range st.Tunnels {
 		node, ok := known[p.HostName]
 		if !ok {
-			node = Node{HostName: p.HostName}
+			// 节点已从 VPN Gate 列表消失，用存盘的信息重建
+			node = Node{
+				HostName:    p.HostName,
+				CountryCode: p.CountryCode,
+				Country:     p.Country,
+			}
 		}
 		node.Config = p.Config
 		t := &Tunnel{

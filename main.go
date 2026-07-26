@@ -256,21 +256,22 @@ func apiXUIClone(m *Manager) http.HandlerFunc {
 		}
 
 		tunnels := m.Tunnels()
-		var slots []int
-		if raw := r.URL.Query().Get("slots"); raw != "" {
+		// 用节点主机名而非槽位号：槽位在重启后会重排，指代会错位
+		var hosts []string
+		if raw := r.URL.Query().Get("hosts"); raw != "" {
 			for _, part := range strings.Split(raw, ",") {
-				if n, err := strconv.Atoi(strings.TrimSpace(part)); err == nil {
-					slots = append(slots, n)
+				if h := strings.TrimSpace(part); h != "" {
+					hosts = append(hosts, h)
 				}
 			}
 		} else {
 			for _, t := range tunnels {
 				if t.Status == "up" {
-					slots = append(slots, t.Slot)
+					hosts = append(hosts, t.Node.HostName)
 				}
 			}
 		}
-		if len(slots) == 0 {
+		if len(hosts) == 0 {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "没有可用的隧道"})
 			return
 		}
@@ -280,7 +281,7 @@ func apiXUIClone(m *Manager) http.HandlerFunc {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 			return
 		}
-		ports, err := x.CloneToTunnels(id, slots, tunnels)
+		ports, err := x.CloneToTunnels(id, hosts, tunnels)
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "created": ports})
 			return

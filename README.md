@@ -55,13 +55,33 @@ SOCKS5 端口和实际出口 IP，直接用 `socks5://<服务器IP>:<端口>` �
 
 ## 运维
 
-```bash
-systemctl status fanout
-systemctl restart fanout
-journalctl -u fanout -f
+装完后敲 `f` 打开管理菜单：启停、看日志、查隧道、改端口/口令/访问路径、更新、卸载。
 
-cat /var/lib/fanout/basepath   # 访问路径
-cat /var/lib/fanout/password   # 访问口令
+```
+  状态      运行中
+  版本      fanout v0.1.0
+  开机自启  enabled
+
+  管理地址  http://1.2.3.4:8899/gwPuWHvaNr/
+  访问口令  f81120ac328d11c11b
+
+   1) 启动          2) 停止
+   3) 重启          4) 查看日志
+   5) 隧道列表      6) 连接信息
+   7) 改端口        8) 改口令
+   9) 改访问路径   10) 开机自启开关
+  11) 更新         12) 卸载
+```
+
+也可以直接带参数用：
+
+```bash
+f info       # 连接信息
+f list       # 隧道列表
+f restart    # 重启
+f log        # 跟踪日志
+f update     # 更新到最新版
+f uninstall  # 卸载
 ```
 
 隧道状态存在 `/var/lib/fanout/state.json`，重启后自动恢复，端口保持不变。

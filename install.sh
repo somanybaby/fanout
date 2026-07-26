@@ -53,6 +53,7 @@ else
   tar xzf "$TMP/f.tar.gz" -C "$TMP"
   install -m 755 "$TMP/fanout" "$BIN"
   [[ -f fanout.service ]] || cp "$TMP/fanout.service" .
+  [[ -f "$TMP/f.sh" ]] && install -m 755 "$TMP/f.sh" /usr/local/bin/f
   rm -rf "$TMP"
 fi
 
@@ -70,6 +71,15 @@ fi
 command -v netfilter-persistent >/dev/null && netfilter-persistent save >/dev/null 2>&1 || true
 
 echo "[4/5] 安装服务"
+# 管理菜单
+if [[ -f f.sh ]]; then
+  install -m 755 f.sh /usr/local/bin/f
+elif [[ -n "${TMP:-}" && -f "${TMP}/f.sh" ]]; then
+  install -m 755 "${TMP}/f.sh" /usr/local/bin/f
+else
+  curl -fsSL "https://raw.githubusercontent.com/${REPO}/main/f.sh" -o /usr/local/bin/f \
+    && chmod 755 /usr/local/bin/f
+fi
 mkdir -p "$WORK_DIR"
 chmod 700 "$WORK_DIR"
 sed "s#-web 8899#-web ${WEB_PORT}#; s#-dir /var/lib/fanout#-dir ${WORK_DIR}#" fanout.service \
@@ -99,4 +109,6 @@ echo
 echo "  路径和口令都是随机生成的，也可以随时查看："
 echo "    cat ${WORK_DIR}/basepath"
 echo "    cat ${WORK_DIR}/password"
+echo
+echo "  输入 f 打开管理菜单"
 echo

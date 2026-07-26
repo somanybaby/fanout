@@ -181,6 +181,16 @@ EOF
   echo -e "  ${G}已禁用 IPv6（重启后依然生效）${N}"
 }
 
+show_links() {
+  echo
+  echo -e "  交流群  ${B}https://t.me/+ft-zI76oovgwNmRh${N}"
+  echo -e "  油管    ${B}https://youtube.com/@joeyblog${N}"
+  echo -e "  博客    ${B}https://joeyblog.net${N}"
+  echo -e "  项目    ${B}https://github.com/byJoey/fanout${N}"
+  echo
+  echo -e "  ${D}用着有问题、或者想要什么功能，去群里说或提 issue。${N}"
+}
+
 do_update() {
   local arch goarch tmp
   arch=$(uname -m)
@@ -242,6 +252,7 @@ menu() {
     echo "   9) 改访问路径   10) 开机自启开关"
     echo
     echo "  11) 更新         12) 卸载"
+    echo "  13) 交流群 / 反馈"
     echo "   0) 退出"
     echo -e "${D}  ─────────────────────────────${N}"
     read -rp "  选择: " choice
@@ -266,6 +277,7 @@ menu() {
         fi
         pause ;;
       11) do_update; pause ;;
+      13) show_links; pause ;;
       12) do_uninstall; pause ;;
       0) exit 0 ;;
       *) ;;

@@ -112,3 +112,9 @@ echo "    cat ${WORK_DIR}/password"
 echo
 echo "  输入 f 打开管理菜单"
 echo
+echo "  ────────────────────────────────"
+echo "  交流群  https://t.me/+ft-zI76oovgwNmRh"
+echo "  油管    https://youtube.com/@joeyblog"
+echo "  博客    https://joeyblog.net"
+echo "  项目    https://github.com/byJoey/fanout"
+echo

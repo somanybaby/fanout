@@ -61,6 +61,10 @@ input[type=search]{font:inherit;background:#0e1116;border:1px solid var(--line);
 input[type=search]:focus{outline:none;border-color:var(--accent)}
 .err{color:var(--bad);font-size:11px;max-width:260px;overflow:hidden;
   text-overflow:ellipsis;display:inline-block;vertical-align:bottom}
+.links{display:flex;gap:14px;margin-right:4px}
+.links a{color:var(--dim);text-decoration:none;font-size:12px}
+.links a:hover{color:var(--accent)}
+@media(max-width:760px){.links{display:none}}
 @media(max-width:860px){.wrap{grid-template-columns:1fr;height:auto}}
 select{font:inherit;background:#0e1116;border:1px solid var(--line);color:var(--text);
   border-radius:4px;padding:3px 6px;max-width:150px}
@@ -91,6 +95,12 @@ a.lnk:hover{color:var(--accent);border-color:var(--accent)}
   <h1>fanout</h1>
   <span class="count" id="xui">正在检测 3x-ui…</span>
   <span class="spacer"></span>
+  <nav class="links">
+    <a href="https://t.me/+ft-zI76oovgwNmRh" target="_blank" rel="noopener" title="交流群">交流群</a>
+    <a href="https://youtube.com/@joeyblog" target="_blank" rel="noopener" title="视频教程">油管</a>
+    <a href="https://joeyblog.net" target="_blank" rel="noopener" title="博客">博客</a>
+    <a href="https://github.com/byJoey/fanout" target="_blank" rel="noopener" title="源码与 issue">GitHub</a>
+  </nav>
   <button id="refresh">重新拉取节点</button>
 </header>
 

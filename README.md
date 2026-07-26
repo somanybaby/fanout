@@ -105,3 +105,11 @@ f uninstall  # 卸载
 节点来自 [VPN Gate](https://www.vpngate.net/)（筑波大学的学术实验项目），
 本工具只是调用其公开的节点列表并用官方 openvpn 客户端连接，不修改也不代理其服务。
 使用时请遵守 VPN Gate 的条款和你所在地的法律。
+
+## 交流
+
+- 交流群：<https://t.me/+ft-zI76oovgwNmRh>
+- 视频教程：<https://youtube.com/@joeyblog>
+- 博客：<https://joeyblog.net>
+
+用着有问题、或者想要什么功能，去群里说或提 issue。

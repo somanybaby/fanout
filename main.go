@@ -1,0 +1,367 @@
+package main
+
+import (
+	"encoding/json"
+	"flag"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+)
+
+// version 由构建时通过 -ldflags 注入。
+var version = "dev"
+
+func main() {
+	var (
+		webPort  = flag.Int("web", 8899, "Web 管理端口")
+		maxSlots = flag.Int("max", 20, "最多同时运行的隧道数")
+		workDir  = flag.String("dir", "/var/lib/fanout", "工作目录")
+	)
+	showVersion := flag.Bool("version", false, "显示版本后退出")
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("fanout", version)
+		return
+	}
+
+	if os.Geteuid() != 0 {
+		log.Fatal("需要 root 权限（要创建 netns 和改 iptables）")
+	}
+	if err := os.MkdirAll(*workDir, 0700); err != nil {
+		log.Fatalf("创建工作目录失败: %v", err)
+	}
+	if err := prepareHost(); err != nil {
+		log.Fatal(err)
+	}
+
+	mgr := NewManager(*maxSlots, *workDir)
+	log.Printf("正在拉取节点列表...")
+	if n, err := mgr.RefreshNodes(); err != nil {
+		log.Printf("拉取失败（可在 Web 界面重试）: %v", err)
+	} else {
+		log.Printf("已获取 %d 个节点", n)
+	}
+
+	if n, err := mgr.restoreState(); err != nil {
+		log.Printf("恢复上次状态失败: %v", err)
+	} else if n > 0 {
+		log.Printf("正在恢复上次的 %d 条隧道", n)
+	}
+
+	go mgr.WatchHealth()
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-stop
+		log.Println("正在清理所有隧道...")
+		mgr.Shutdown()
+		os.Exit(0)
+	}()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", handleIndex)
+	mux.HandleFunc("/api/nodes", apiNodes(mgr))
+	mux.HandleFunc("/api/tunnels", apiTunnels(mgr))
+	mux.HandleFunc("/api/start", apiStart(mgr))
+	mux.HandleFunc("/api/stop", apiStop(mgr))
+	mux.HandleFunc("/api/refresh", apiRefresh(mgr))
+	mux.HandleFunc("/api/xui", apiXUIStatus)
+	mux.HandleFunc("/api/xui/inbounds", apiXUIInbounds(mgr))
+	mux.HandleFunc("/api/xui/bind", apiXUIBind(mgr))
+	mux.HandleFunc("/api/xui/clone", apiXUIClone(mgr))
+	mux.HandleFunc("/api/xui/detail", apiXUIDetail)
+	mux.HandleFunc("/api/xui/links", apiXUILinks)
+
+	auth, created, err := NewAuth(*workDir)
+	if err != nil {
+		log.Fatalf("初始化访问口令失败: %v", err)
+	}
+	if created {
+		log.Printf("已生成访问口令，见 %s", filepath.Join(*workDir, "password"))
+	}
+
+	basePath, bpCreated, err := LoadBasePath(*workDir)
+	if err != nil {
+		log.Fatalf("初始化访问路径失败: %v", err)
+	}
+	if bpCreated {
+		log.Printf("已生成访问路径，见 %s", filepath.Join(*workDir, "basepath"))
+	}
+
+	addr := fmt.Sprintf(":%d", *webPort)
+	log.Printf("管理界面: http://<本机IP>%s%s/", addr, basePath)
+	log.Printf("SOCKS5 端口在 %d-%d 之间随机分配", randPortMin, randPortMax)
+	if err := http.ListenAndServe(addr, StripBasePath(basePath, auth.Wrap(mux))); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func apiNodes(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		nodes, fetched := m.Nodes()
+		if len(nodes) > 200 {
+			nodes = nodes[:200]
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"nodes":   nodes,
+			"fetched": fetched,
+		})
+	}
+}
+
+func apiTunnels(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, m.Tunnels())
+	}
+}
+
+func apiStart(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		host := r.URL.Query().Get("host")
+		if host == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "缺少 host 参数"})
+			return
+		}
+		nodes, _ := m.Nodes()
+		for _, n := range nodes {
+			if n.HostName == host {
+				t, err := m.Start(n)
+				if err != nil {
+					writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+					return
+				}
+				writeJSON(w, http.StatusOK, t)
+				return
+			}
+		}
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "节点不存在，可能列表已过期"})
+	}
+}
+
+func apiStop(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		slot, err := strconv.Atoi(r.URL.Query().Get("slot"))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "slot 参数无效"})
+			return
+		}
+		if err := m.Stop(slot); err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"ok": "已停止"})
+	}
+}
+
+func apiRefresh(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		n, err := m.RefreshNodes()
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]int{"count": n})
+	}
+}
+
+// apiXUIStatus 报告本机 3x-ui 的探测结果。
+func apiXUIStatus(w http.ResponseWriter, r *http.Request) {
+	x, err := DetectXUI()
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"available": false,
+			"reason":    err.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"available": true,
+		"port":      x.Port,
+		"base_path": x.BasePath,
+	})
+}
+
+// apiXUIInbounds 列出面板里已有的入站及其绑定状态。
+func apiXUIInbounds(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+	x, err := DetectXUI()
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	list, err := x.Inbounds(liveHosts(m))
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+	}
+}
+
+// liveHosts 返回当前有连通隧道的节点标识集合。
+func liveHosts(m *Manager) map[string]bool {
+	live := map[string]bool{}
+	for _, t := range m.Tunnels() {
+		if t.Status == "up" {
+			live[sanitizeTag(t.Node.HostName)] = true
+		}
+	}
+	return live
+}
+
+// apiXUIBind 把某个入站绑定到某条隧道，slot=0 表示解绑。
+func apiXUIBind(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tag := r.URL.Query().Get("tag")
+		if tag == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "缺少 tag 参数"})
+			return
+		}
+		host := r.URL.Query().Get("host")
+		x, err := DetectXUI()
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		if err := x.Bind(tag, host, m.Tunnels()); err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"ok": "已更新"})
+	}
+}
+
+// apiXUIClone 以某个入站为模板，为所有已连通的隧道各复制一个入站并绑好出口。
+func apiXUIClone(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.Atoi(r.URL.Query().Get("id"))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id 参数无效"})
+			return
+		}
+
+		tunnels := m.Tunnels()
+		var slots []int
+		if raw := r.URL.Query().Get("slots"); raw != "" {
+			for _, part := range strings.Split(raw, ",") {
+				if n, err := strconv.Atoi(strings.TrimSpace(part)); err == nil {
+					slots = append(slots, n)
+				}
+			}
+		} else {
+			for _, t := range tunnels {
+				if t.Status == "up" {
+					slots = append(slots, t.Slot)
+				}
+			}
+		}
+		if len(slots) == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "没有可用的隧道"})
+			return
+		}
+
+		x, err := DetectXUI()
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		ports, err := x.CloneToTunnels(id, slots, tunnels)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "created": ports})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"created": ports})
+	}
+}
+
+// apiXUIDetail 返回某个入站的详情，含客户端与可直接复制的分享链接。
+func apiXUIDetail(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.URL.Query().Get("id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id 参数无效"})
+		return
+	}
+	x, err := DetectXUI()
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	host := r.URL.Query().Get("host")
+	if host == "" {
+		host = publicHost(r)
+	}
+	detail, err := x.InboundDetail(id, host)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+// publicHost 猜一个客户端能连上的地址：优先用访问 fanout 时用的主机名。
+func publicHost(r *http.Request) string {
+	host := r.Host
+	if i := strings.LastIndex(host, ":"); i > 0 {
+		host = host[:i]
+	}
+	if host == "" || host == "127.0.0.1" || host == "localhost" {
+		return "<服务器IP>"
+	}
+	return host
+}
+
+// apiXUILinks 批量导出多个入站的分享链接。
+func apiXUILinks(w http.ResponseWriter, r *http.Request) {
+	x, err := DetectXUI()
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+
+	var ids []int
+	if raw := r.URL.Query().Get("ids"); raw != "" {
+		for _, part := range strings.Split(raw, ",") {
+			if n, err := strconv.Atoi(strings.TrimSpace(part)); err == nil {
+				ids = append(ids, n)
+			}
+		}
+	} else {
+		list, err := x.Inbounds(nil)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		for _, ib := range list {
+			ids = append(ids, ib.ID)
+		}
+	}
+	if len(ids) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "没有可导出的入站"})
+		return
+	}
+
+	host := r.URL.Query().Get("host")
+	if host == "" {
+		host = publicHost(r)
+	}
+	links, err := x.InboundLinks(ids, host)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "links": links})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"links": links})
+}

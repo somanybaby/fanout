@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,8 +20,14 @@ import (
 type XUI struct {
 	Port     int    `json:"port"`
 	BasePath string `json:"base_path"`
+	Scheme   string `json:"scheme"`
 	token    string
 	client   *http.Client
+}
+
+// base 返回面板的本地访问前缀。
+func (x *XUI) base() string {
+	return fmt.Sprintf("%s://127.0.0.1:%d%s", x.Scheme, x.Port, x.BasePath)
 }
 
 const xuiBinary = "/usr/local/x-ui/x-ui"
@@ -37,6 +44,10 @@ var (
 	reXUIBase  = regexp.MustCompile(`(?m)^webBasePath:\s*(\S+)`)
 	// 只认 "apiToken: xxx" 这一行，避免匹配到提示文字里的长单词
 	reXUIToken = regexp.MustCompile(`(?m)^apiToken:\s*([A-Za-z0-9]+)`)
+	// 面板开了 TLS 时 setting -show 会打印 "Panel is secure with SSL"
+	reXUISSL = regexp.MustCompile(`(?i)panel is secure with ssl`)
+	// 兜底：证书路径非空也说明启用了 TLS
+	reXUICert = regexp.MustCompile(`(?m)^cert:\s*\S+`)
 )
 
 // DetectXUI 探测本机 3x-ui。未安装或未运行时返回错误。
@@ -50,6 +61,15 @@ func DetectXUI() (*XUI, error) {
 		return nil, fmt.Errorf("读取面板设置失败: %w", err)
 	}
 	text := string(out)
+
+	scheme := "http"
+	if reXUISSL.MatchString(text) {
+		scheme = "https"
+	} else if out, err := exec.Command(xuiBinary, "setting", "-getCert").Output(); err == nil {
+		if reXUICert.MatchString(string(out)) {
+			scheme = "https"
+		}
+	}
 
 	pm := reXUIPort.FindStringSubmatch(text)
 	bm := reXUIBase.FindStringSubmatch(text)
@@ -65,8 +85,9 @@ func DetectXUI() (*XUI, error) {
 		return &XUI{
 			Port:     port,
 			BasePath: strings.TrimSuffix(bm[1], "/"),
+			Scheme:   scheme,
 			token:    cachedToken,
-			client:   &http.Client{Timeout: 20 * time.Second},
+			client:   localClient(),
 		}, nil
 	}
 
@@ -85,9 +106,24 @@ func DetectXUI() (*XUI, error) {
 	return &XUI{
 		Port:     port,
 		BasePath: strings.TrimSuffix(bm[1], "/"),
+		Scheme:   scheme,
 		token:    token,
-		client:   &http.Client{Timeout: 20 * time.Second},
+		client:   localClient(),
 	}, nil
+}
+
+// localClient 用于访问本机面板。
+//
+// 面板启用 TLS 时证书通常签给公网 IP 或域名，而我们走的是 127.0.0.1，
+// 校验必然失败。这是同一台机器上的进程间调用，不经过网络，
+// 没有中间人风险，所以跳过证书校验。
+func localClient() *http.Client {
+	return &http.Client{
+		Timeout: 20 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //#nosec G402 -- 仅用于 127.0.0.1
+		},
+	}
 }
 
 // post 调用面板 API。v3.5.0 里 Bearer token 只对 /panel/api/ 前缀生效。
@@ -101,7 +137,7 @@ func (x *XUI) get(path string) ([]byte, error) {
 }
 
 func (x *XUI) call(method, path string, form url.Values) ([]byte, error) {
-	endpoint := fmt.Sprintf("http://127.0.0.1:%d%s/%s", x.Port, x.BasePath, strings.TrimPrefix(path, "/"))
+	endpoint := fmt.Sprintf("%s/%s", x.base(), strings.TrimPrefix(path, "/"))
 
 	var body io.Reader
 	if form != nil {
@@ -635,7 +671,7 @@ func (x *XUI) addInbound(payload map[string]any) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	endpoint := fmt.Sprintf("http://127.0.0.1:%d%s/panel/api/inbounds/add", x.Port, x.BasePath)
+	endpoint := x.base() + "/panel/api/inbounds/add"
 	req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(string(body)))
 	if err != nil {
 		return 0, err
@@ -672,8 +708,7 @@ func (x *XUI) attachClients(emails []string, inboundID int) error {
 		if err != nil {
 			return err
 		}
-		endpoint := fmt.Sprintf("http://127.0.0.1:%d%s/panel/api/clients/%s/attach",
-			x.Port, x.BasePath, url.PathEscape(email))
+		endpoint := fmt.Sprintf("%s/panel/api/clients/%s/attach", x.base(), url.PathEscape(email))
 		req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(string(body)))
 		if err != nil {
 			return err

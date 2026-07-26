@@ -304,7 +304,7 @@ async function checkXui(){
   try{
     const d = await api('/api/xui');
     if(d.available){
-      $('#xui').textContent = '3x-ui 面板 :' + d.port;
+      $('#xui').textContent = '3x-ui 面板 ' + (d.scheme || 'http') + ' :' + d.port;
       loadInbounds();
     }else{
       $('#xui').textContent = '3x-ui: ' + d.reason;

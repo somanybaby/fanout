@@ -5,6 +5,12 @@
 把 VPN Gate 的公共节点变成本地 SOCKS5 端口：一个端口一个出口 IP。
 可选对接同机的 3x-ui，把面板里的入站按出口分流。
 
+![主界面](https://images.joeyblog.net/2026/7/26/fanout-2-dashboard.png)
+
+四条隧道跑在一台机器上，四个端口对应四个国家的出口，母机自己的 IP 不受影响：
+
+![出口验证](https://images.joeyblog.net/2026/7/26/fanout-6-exit-ip.png)
+
 ## 原理
 
 每个节点跑在独立的 network namespace 里，netns 内启动官方 openvpn 客户端。
@@ -14,7 +20,7 @@ SOCKS5 监听在母机，出站连接用 `setns` 切进对应 netns 建立。
 多个节点互不干扰，各自一个出口 IP。
 
 ```
-客户端 ──> 母机 SOCKS5 :随机端口 ──> netns vgN ──> openvpn ──> VPN Gate 节点
+客户端 ──> 母机 SOCKS5 :随机端口 ──> netns foN ──> openvpn ──> VPN Gate 节点
 ```
 
 ## 安装
@@ -28,6 +34,10 @@ bash <(curl -fsSL https://raw.githubusercontent.com/byJoey/fanout/main/install.s
 会自动下载对应架构的预编译二进制。也可以 clone 仓库后在源码目录运行同一个脚本，
 那样会从源码编译（需要 Go 1.21+）。
 
+装完敲 `f` 打开管理菜单：
+
+![管理菜单](https://images.joeyblog.net/2026/7/26/fanout-7-menu.png)
+
 装完会打印管理界面地址、访问路径和口令：
 
 ```
@@ -40,8 +50,13 @@ bash <(curl -fsSL https://raw.githubusercontent.com/byJoey/fanout/main/install.s
 
 ## 使用
 
-打开管理界面，点「添加节点」选一个节点启动。连通后左栏会显示分配到的
-SOCKS5 端口和实际出口 IP，直接用 `socks5://<服务器IP>:<端口>` 即可。
+打开管理界面，点「添加节点」选一个节点启动。列表实时从 VPN Gate 拉取，
+按带宽排序，标了延迟和当前会话数：
+
+![节点列表](https://images.joeyblog.net/2026/7/26/fanout-3-nodes.png)
+
+连通后左栏会显示分配到的 SOCKS5 端口和实际出口 IP，
+直接用 `socks5://<服务器IP>:<端口>` 即可。
 
 ### 对接 3x-ui
 
@@ -53,7 +68,16 @@ SOCKS5 端口和实际出口 IP，直接用 `socks5://<服务器IP>:<端口>` �
   只需要改端口。
 - **导出链接**：勾选入站后点「导出链接」，拿到可直接粘贴的分享链接。
 
-面板端口、路径、API token 都是自动探测的，不用手工填。
+面板端口、路径、API token 都是自动探测的，不用手工填；面板开了 SSL 也能自动识别。
+
+点入站备注看详情：出口 IP、对应节点、Xray tag、客户端 UUID 和分享链接都在这里，
+省得在两个面板之间来回跳。
+
+![入站详情](https://images.joeyblog.net/2026/7/26/fanout-4-inbound-detail.png)
+
+批量导出：
+
+![导出链接](https://images.joeyblog.net/2026/7/26/fanout-5-export.png)
 
 ## 运维
 

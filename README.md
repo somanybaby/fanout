@@ -1,5 +1,7 @@
 # fanout
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 把 VPN Gate 的公共节点变成本地 SOCKS5 端口：一个端口一个出口 IP。
 可选对接同机的 3x-ui，把面板里的入站按出口分流。
 
@@ -95,3 +97,11 @@ f uninstall  # 卸载
 - VPN Gate 是志愿者节点，有相当比例已下线或满员（`AUTH_FAILED`）。
   启动时连不上会自动顺着同地区候选往下试，最多 6 个。
 - 管理界面只有随机路径 + 口令登录，没有 HTTPS。放公网建议前面套一层反代。
+
+## 许可
+
+[MIT](LICENSE)。
+
+节点来自 [VPN Gate](https://www.vpngate.net/)（筑波大学的学术实验项目），
+本工具只是调用其公开的节点列表并用官方 openvpn 客户端连接，不修改也不代理其服务。
+使用时请遵守 VPN Gate 的条款和你所在地的法律。

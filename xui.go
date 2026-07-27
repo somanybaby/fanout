@@ -302,6 +302,7 @@ func (x *XUI) Inbounds(live map[string]bool) ([]Inbound, error) {
 		Protocol string          `json:"protocol"`
 		Remark   string          `json:"remark"`
 		Enable   bool            `json:"enable"`
+		Tag      string          `json:"tag"`
 		Stream   json.RawMessage `json:"streamSettings"`
 	}
 	if err := json.Unmarshal(obj, &raw); err != nil {
@@ -315,7 +316,11 @@ func (x *XUI) Inbounds(live map[string]bool) ([]Inbound, error) {
 
 	out := make([]Inbound, 0, len(raw))
 	for _, r := range raw {
-		tag := inboundTag(r.Port, r.Stream)
+		// 3x-ui persists the authoritative Xray tag and returns it in this API.
+		// Do not reconstruct it from the transport: recent 3x-ui versions may
+		// keep a "-tcp" tag for WebSocket inbounds, so reconstruction produces
+		// a routing rule that can never match the running Xray inbound.
+		tag := resolvedInboundTag(r.Tag, r.Port, r.Stream)
 		out = append(out, Inbound{
 			ID: r.ID, Port: r.Port, Protocol: r.Protocol,
 			Remark: r.Remark, Enable: r.Enable,
@@ -343,6 +348,15 @@ func inboundTag(port int, streamSettings json.RawMessage) string {
 		}
 	}
 	return fmt.Sprintf("in-%d-%s", port, network)
+}
+
+// resolvedInboundTag uses the authoritative tag returned by 3x-ui and only
+// reconstructs it for compatibility with older API responses that omit tag.
+func resolvedInboundTag(apiTag string, port int, streamSettings json.RawMessage) string {
+	if apiTag != "" {
+		return apiTag
+	}
+	return inboundTag(port, streamSettings)
 }
 
 // 出站与路由规则统一带这个前缀，便于识别与清理，不碰用户手工加的条目。
@@ -594,7 +608,18 @@ func (x *XUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 		}
 		created = append(created, port)
 
-		if err := x.Bind(inboundTagOf(port, raw), t.Node.HostName, tunnels); err != nil {
+		// Read the tag assigned by 3x-ui instead of guessing it from the
+		// template transport. This matters for WS inbounds whose persisted tag
+		// may still use the "tcp" suffix.
+		newRaw, err := x.rawInbound(newID)
+		if err != nil {
+			return created, fmt.Errorf("读取端口 %d 的入站标签失败: %w", port, err)
+		}
+		newTag, _ := newRaw["tag"].(string)
+		if newTag == "" {
+			newTag = inboundTagOf(port, raw)
+		}
+		if err := x.Bind(newTag, t.Node.HostName, tunnels); err != nil {
 			return created, fmt.Errorf("端口 %d 绑定失败: %w", port, err)
 		}
 	}
@@ -862,7 +887,8 @@ func (x *XUI) InboundDetail(id int, publicHost string) (*InboundDetail, error) {
 
 	streamJSON, _ := json.Marshal(raw["streamSettings"])
 	port := int(toFloat(raw["port"]))
-	tag := inboundTag(port, streamJSON)
+	apiTag, _ := raw["tag"].(string)
+	tag := resolvedInboundTag(apiTag, port, streamJSON)
 
 	detail := &InboundDetail{
 		Inbound: Inbound{

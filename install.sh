@@ -11,25 +11,72 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
-echo "[1/5] 检查依赖"
-need_pkg=()
-command -v openvpn >/dev/null || need_pkg+=(openvpn)
-command -v curl    >/dev/null || need_pkg+=(curl)
-command -v ip      >/dev/null || need_pkg+=(iproute2)
-command -v iptables >/dev/null || need_pkg+=(iptables)
-if [[ ${#need_pkg[@]} -gt 0 ]]; then
-  echo "      安装: ${need_pkg[*]}"
-  if command -v apt-get >/dev/null; then
-    apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${need_pkg[@]}"
-  elif command -v dnf >/dev/null; then
-    dnf install -y -q "${need_pkg[@]}"
-  else
-    echo "      不认识的包管理器，请手动安装: ${need_pkg[*]}" >&2
+echo "[1/6] 检查依赖"
+
+# 同一个命令在各发行版里的包名并不一致，按包管理器分别给出。
+pkg_for() {
+  local cmd="$1" mgr="$2"
+  case "$cmd" in
+    openvpn)  echo openvpn ;;
+    curl)     echo curl ;;
+    openssl)  echo openssl ;;
+    tar)      echo tar ;;
+    ip)       case "$mgr" in apk) echo iproute2 ;; pacman) echo iproute2 ;; *) echo iproute ;; esac ;;
+    iptables) echo iptables ;;
+    unzip)    echo unzip ;;
+  esac
+}
+
+detect_mgr() {
+  for m in apt-get dnf yum pacman apk zypper; do
+    command -v "$m" >/dev/null && { echo "$m"; return; }
+  done
+  echo ""
+}
+
+install_pkgs() {
+  local mgr="$1"; shift
+  case "$mgr" in
+    apt-get)
+      apt-get update -qq
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@"
+      ;;
+    dnf)    dnf install -y -q "$@" ;;
+    yum)    yum install -y -q "$@" ;;
+    pacman) pacman -Sy --noconfirm --needed "$@" ;;
+    apk)    apk add --no-cache "$@" ;;
+    zypper) zypper --non-interactive install -y "$@" ;;
+  esac
+}
+
+MGR=$(detect_mgr)
+# Debian/Ubuntu 的 iproute2 与 RHEL 系的 iproute 是同一个东西，名字不同
+[[ "$MGR" == "apt-get" ]] && iproute_pkg=iproute2 || iproute_pkg=iproute
+
+need_cmd=()
+for c in openvpn curl openssl tar iptables; do
+  command -v "$c" >/dev/null || need_cmd+=("$c")
+done
+command -v ip >/dev/null || need_cmd+=(ip)
+
+if [[ ${#need_cmd[@]} -gt 0 ]]; then
+  echo "      缺少: ${need_cmd[*]}"
+  if [[ -z "$MGR" ]]; then
+    echo "      不认识的包管理器，请手动安装后重试" >&2
     exit 1
   fi
+  pkgs=()
+  for c in "${need_cmd[@]}"; do
+    if [[ "$c" == "ip" ]]; then pkgs+=("$iproute_pkg"); else pkgs+=("$(pkg_for "$c" "$MGR")"); fi
+  done
+  echo "      安装: ${pkgs[*]}"
+  install_pkgs "$MGR" "${pkgs[@]}" || {
+    echo "      自动安装失败，请手动安装: ${pkgs[*]}" >&2
+    exit 1
+  }
 fi
 
-echo "[2/5] 获取程序"
+echo "[2/6] 获取程序"
 REPO="${REPO:-byJoey/fanout}"
 ARCH=$(uname -m)
 case "$ARCH" in
@@ -57,7 +104,45 @@ else
   rm -rf "$TMP"
 fi
 
-echo "[3/5] 放行转发"
+echo "[3/6] 准备 Xray"
+# 没装 3x-ui 时 fanout 自己跑 Xray，需要一份二进制。
+# 装到 WORK_DIR/bin 下而不是 /usr/local/bin，避免和机器上别人的 xray 抢版本。
+mkdir -p "${WORK_DIR}/bin"
+if command -v /usr/local/x-ui/x-ui >/dev/null 2>&1 || [[ -x /usr/bin/x-ui ]]; then
+  echo "      检测到 3x-ui，入站交给面板管，跳过"
+elif [[ -x "${WORK_DIR}/bin/xray" ]]; then
+  echo "      已有 $("${WORK_DIR}/bin/xray" version 2>/dev/null | head -1)"
+else
+  case "$GOARCH" in
+    amd64) XRAY_ASSET=Xray-linux-64.zip ;;
+    arm64) XRAY_ASSET=Xray-linux-arm64-v8a.zip ;;
+  esac
+  echo "      下载 Xray (${XRAY_ASSET})"
+  XT=$(mktemp -d)
+  XURL="https://github.com/XTLS/Xray-core/releases/latest/download/${XRAY_ASSET}"
+  if curl -fsSL "$XURL" -o "$XT/x.zip"; then
+    # 只为解一个 zip 装 unzip 有点重，busybox 环境常自带
+    if command -v unzip >/dev/null; then
+      unzip -qo "$XT/x.zip" -d "$XT"
+    elif command -v busybox >/dev/null && busybox unzip -h >/dev/null 2>&1; then
+      busybox unzip -qo "$XT/x.zip" -d "$XT"
+    else
+      [[ -n "$MGR" ]] && install_pkgs "$MGR" unzip >/dev/null 2>&1 || true
+      command -v unzip >/dev/null && unzip -qo "$XT/x.zip" -d "$XT"
+    fi
+    if [[ -f "$XT/xray" ]]; then
+      install -m 755 "$XT/xray" "${WORK_DIR}/bin/xray"
+      echo "      $("${WORK_DIR}/bin/xray" version 2>/dev/null | head -1)"
+    else
+      echo "      解压失败，自建模式不可用（装了 3x-ui 则不受影响）" >&2
+    fi
+  else
+    echo "      下载失败，自建模式不可用（装了 3x-ui 则不受影响）" >&2
+  fi
+  rm -rf "$XT"
+fi
+
+echo "[4/6] 放行转发"
 sysctl -qw net.ipv4.ip_forward=1
 grep -q '^net.ipv4.ip_forward=1' /etc/sysctl.conf 2>/dev/null \
   || echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
@@ -70,7 +155,7 @@ if ! iptables -C FORWARD -d 10.99.0.0/16 -j ACCEPT 2>/dev/null; then
 fi
 command -v netfilter-persistent >/dev/null && netfilter-persistent save >/dev/null 2>&1 || true
 
-echo "[4/5] 安装服务"
+echo "[5/6] 安装服务"
 # 管理菜单
 if [[ -f f.sh ]]; then
   install -m 755 f.sh /usr/local/bin/f
@@ -87,7 +172,7 @@ sed "s#-web 8899#-web ${WEB_PORT}#; s#-dir /var/lib/fanout#-dir ${WORK_DIR}#" fa
 systemctl daemon-reload
 systemctl enable --now fanout
 
-echo "[5/5] 就绪"
+echo "[6/6] 就绪"
 sleep 3
 systemctl is-active --quiet fanout && echo "      服务运行中" || {
   echo "      服务启动失败，看 journalctl -u fanout -n 30" >&2

@@ -3,9 +3,12 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 把 VPN Gate 的公共节点变成本地 SOCKS5 端口：一个端口一个出口 IP。
-可选对接同机的 3x-ui，把面板里的入站按出口分流。
+再给每个出口挂一个节点链接，客户端连哪个端口就从哪个国家出去。
 
-![主界面](https://images.joeyblog.net/2026/7/26/fanout-2-dashboard.png)
+节点链接有两种管法：同机装了 3x-ui 就接管面板里的入站，没装则 fanout
+自己跑 Xray，建站、改站、发链接都在同一个界面里完成。
+
+![主界面](https://images.joeyblog.net/2026/7/27/fanout-dashboard.png)
 
 四条隧道跑在一台机器上，四个端口对应四个国家的出口，母机自己的 IP 不受影响：
 
@@ -34,6 +37,10 @@ bash <(curl -fsSL https://raw.githubusercontent.com/byJoey/fanout/main/install.s
 会自动下载对应架构的预编译二进制。也可以 clone 仓库后在源码目录运行同一个脚本，
 那样会从源码编译（需要 Go 1.21+）。
 
+依赖（openvpn / curl / openssl / iproute / iptables）会按发行版自动装，
+apt、dnf、yum、pacman、apk、zypper 都认。没装 3x-ui 时还会顺带下载一份
+Xray 到 `/var/lib/fanout/bin/`，装了则跳过，入站交给面板管。
+
 装完敲 `f` 打开管理菜单：
 
 ![管理菜单](https://images.joeyblog.net/2026/7/26/fanout-7-menu.png)
@@ -50,34 +57,42 @@ bash <(curl -fsSL https://raw.githubusercontent.com/byJoey/fanout/main/install.s
 
 ## 使用
 
-打开管理界面，点「添加节点」选一个节点启动。列表实时从 VPN Gate 拉取，
-按带宽排序，标了延迟和当前会话数：
+界面以**出口**为单位：一行就是一条隧道加上挂在它上面的节点链接。
 
-![节点列表](https://images.joeyblog.net/2026/7/26/fanout-3-nodes.png)
+点「新建出口」，选地区和数量，再选一个已有节点作模板，提交后 fanout 会并行
+拉起隧道、为每个出口复制一份节点链接并绑好，进度按目标逐条回报。原来要手点
+五步跨两栏的事，现在一次点击十几秒完成。
 
-连通后左栏会显示分配到的 SOCKS5 端口和实际出口 IP，
-直接用 `socks5://<服务器IP>:<端口>` 即可。
+![新建出口](https://images.joeyblog.net/2026/7/27/fanout-wizard.png)
 
-### 对接 3x-ui
+每行右侧两个按钮：换一个节点（出口 IP 变、端口不变，已分发的客户端配置不用改），
+或者停掉这个出口。
 
-同机装了 3x-ui 时，右栏会列出面板里已有的入站。
+点节点名进详情，可以改端口、备注、启停，管理客户端，以及改绑到别的出口：
 
-- **改出口**：在入站行的下拉框里选一个节点，该入站的流量就从那个节点出去。
-- **按出口复制**：左栏勾选若干出口，右栏选一个入站作模板，点「按出口复制…」，
-  会为每个出口复制一个入站。复制体共用模板的客户端，所以你的 UUID 不变，
-  只需要改端口。
-- **导出链接**：勾选入站后点「导出链接」，拿到可直接粘贴的分享链接。
+![节点详情](https://images.joeyblog.net/2026/7/27/fanout-detail.png)
 
-面板端口、路径、API token 都是自动探测的，不用手工填；面板开了 SSL 也能自动识别。
+一个入站可以挂多套客户端凭据，分发给不同的人；每套都能单独重置，
+重置后旧链接立即失效。
 
-点入站备注看详情：出口 IP、对应节点、Xray tag、客户端 UUID 和分享链接都在这里，
-省得在两个面板之间来回跳。
+「导出链接」一次性拿到所有节点链接：
 
-![入站详情](https://images.joeyblog.net/2026/7/26/fanout-4-inbound-detail.png)
+![导出链接](https://images.joeyblog.net/2026/7/27/fanout-export.png)
 
-批量导出：
+### 节点链接从哪来
 
-![导出链接](https://images.joeyblog.net/2026/7/26/fanout-5-export.png)
+同机装了 3x-ui 就直接接管面板里的入站，面板端口、路径、API token 全自动探测，
+开了 SSL 也能识别。没装 3x-ui 时 fanout 自己跑一个 Xray，界面上多一个「新建节点」
+按钮，可以选协议（VLESS / VMess / Trojan）、传输（TCP / WebSocket / gRPC /
+HTTPUpgrade / XHTTP）和安全层（无 / TLS / REALITY）。
+
+![新建节点](https://images.joeyblog.net/2026/7/27/fanout-newnode.png)
+
+REALITY 的密钥对和 shortId 自动生成；TLS 不填证书就生成自签的，分享链接会带上
+证书指纹让客户端固定信任。也可以填自己的证书路径。
+
+两种模式下改端口、启停、加删客户端、绑定出口的操作完全一致，用起来没有区别。
+想固定用哪种，加 `-panel 3x-ui` 或 `-panel native` 启动参数。
 
 ## 运维
 
@@ -85,7 +100,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/byJoey/fanout/main/install.s
 
 ```
   状态      运行中
-  版本      fanout v0.1.0
+  版本      fanout v0.1.1
   开机自启  enabled
 
   管理地址  http://1.2.3.4:8899/gwPuWHvaNr/
@@ -112,8 +127,9 @@ f uninstall  # 卸载
 
 隧道状态存在 `/var/lib/fanout/state.json`，重启后自动恢复，端口保持不变。
 
-健康检查每分钟跑一次，连续两次探测失败就自动换节点重连，槽位和端口不变；
-如果对接了 3x-ui，原先指向它的入站会自动改绑到新节点。
+健康检查每 10 秒跑一次，比对出口 IP 是否还是建立隧道时那个——openvpn 挂掉后
+netns 仍能经母机 NAT 出网，只看通不通会漏判。连续两次不符就自动换节点重连，
+槽位和端口不变，原先指向它的节点链接会自动改绑过去。
 
 ## 已知限制
 

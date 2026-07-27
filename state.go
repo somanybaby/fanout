@@ -28,7 +28,9 @@ func statePath(dir string) string { return filepath.Join(dir, "state.json") }
 func (m *Manager) saveState() error {
 	var st persistedState
 	for _, t := range m.Tunnels() {
-		if t.Status != "up" {
+		// 只跳过用户主动停掉的。starting/failed 的隧道也要存：
+		// 它们正在重连或等着重试，漏存会让重启后凭空少几个出口。
+		if t.Status == "stopped" {
 			continue
 		}
 		st.Tunnels = append(st.Tunnels, persistedTunnel{

@@ -96,22 +96,22 @@ func (t *Tunnel) setupNetns() error {
 
 // ensureRule 幂等追加一条 iptables 规则。
 func ensureRule(table, chain string, spec ...string) {
-	check := append([]string{"-t", table, "-C", chain}, spec...)
+	check := append([]string{"-w", "5", "-t", table, "-C", chain}, spec...)
 	if exec.Command("iptables", check...).Run() == nil {
 		return
 	}
-	add := append([]string{"-t", table, "-A", chain}, spec...)
+	add := append([]string{"-w", "5", "-t", table, "-A", chain}, spec...)
 	runQuiet("iptables", add...)
 }
 
 // ensureRuleInsert 幂等插入规则到链首。
 // FORWARD 链末尾常有兜底 REJECT，必须插到最前面才生效。
 func ensureRuleInsert(table, chain string, spec ...string) {
-	check := append([]string{"-t", table, "-C", chain}, spec...)
+	check := append([]string{"-w", "5", "-t", table, "-C", chain}, spec...)
 	if exec.Command("iptables", check...).Run() == nil {
 		return
 	}
-	ins := append([]string{"-t", table, "-I", chain, "1"}, spec...)
+	ins := append([]string{"-w", "5", "-t", table, "-I", chain, "1"}, spec...)
 	runQuiet("iptables", ins...)
 }
 
@@ -120,9 +120,9 @@ func (t *Tunnel) teardownNetns() {
 	cidr := sub + ".0/30"
 	runQuiet("ip", "netns", "del", ns)
 	runQuiet("ip", "link", "del", fmt.Sprintf("fov%d", t.Slot))
-	runQuiet("iptables", "-t", "nat", "-D", "POSTROUTING", "-s", cidr, "-j", "MASQUERADE")
-	runQuiet("iptables", "-D", "FORWARD", "-s", cidr, "-j", "ACCEPT")
-	runQuiet("iptables", "-D", "FORWARD", "-d", cidr, "-j", "ACCEPT")
+	runQuiet("iptables", "-w", "5", "-t", "nat", "-D", "POSTROUTING", "-s", cidr, "-j", "MASQUERADE")
+	runQuiet("iptables", "-w", "5", "-D", "FORWARD", "-s", cidr, "-j", "ACCEPT")
+	runQuiet("iptables", "-w", "5", "-D", "FORWARD", "-d", cidr, "-j", "ACCEPT")
 }
 
 // startOpenVPN 在 netns 内拉起 openvpn，并等待 tun0 拿到地址。

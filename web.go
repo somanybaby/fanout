@@ -153,6 +153,8 @@ label.chk input{margin:0}
   padding-top:12px;border-top:1px solid var(--line)}
 .chead h3{font-size:12px;margin:0;font-weight:600;color:var(--dim)}
 .client{border:1px solid var(--line);border-radius:4px;padding:8px 10px;margin-bottom:8px}
+.orow{display:flex;align-items:center;gap:10px;padding:6px 0}
+.orow select{width:200px}
 .crow{display:flex;align-items:center;gap:10px}
 .cemail{font-weight:600;font-size:12px}
 .cid{color:var(--dim);font-size:11px;overflow:hidden;text-overflow:ellipsis;
@@ -486,16 +488,23 @@ function renderOrphans(){
   const box = $('#orphans');
   const list = view.direct || [];
   if(!list.length){ box.innerHTML = ''; return; }
+  const hasUp = view.exits.some(e => e.status === 'up');
   box.innerHTML = '<div class="orphan"><div class="top">'
     + '<h3>未绑定出口的入站</h3><span class="count">' + list.length + ' 个，走直连</span>'
     + '<span class="spacer"></span>'
     + '<button data-delorphans="1" title="删除这些入站">'
     + ICON.trash + '清理</button></div>'
-    + '<div class="chips">' + list.map(i =>
-        '<button class="chip" data-detail="' + i.id + '" title="'
-        + esc((i.remark || i.protocol) + ' · ' + i.protocol + ' :' + i.port) + '">'
-        + esc(i.remark || i.protocol) + ' :' + i.port + '</button>').join('')
-    + '</div></div>';
+    + list.map(i =>
+        '<div class="orow">'
+        + '<button class="chip" data-detail="' + i.id + '" title="'
+        +   esc((i.remark || i.protocol) + ' · ' + i.protocol + ' :' + i.port) + '">'
+        +   esc(i.remark || i.protocol) + ' :' + i.port + '</button>'
+        + '<span class="spacer"></span>'
+        + (hasUp
+            ? '<select class="obind" data-tag="' + esc(i.tag) + '">' + exitOptions('') + '</select>'
+            : '<span class="dim">先开一个出口</span>')
+        + '</div>').join('')
+    + '</div>';
 }
 
 function renderJobs(jobs){
@@ -779,9 +788,17 @@ async function openDetail(id){
   }
 }
 
+// 出口下拉：列出所有已连通的隧道，外加"直连"。绑定按 Xray 的 inboundTag 走。
+function exitOptions(currentHost){
+  const up = view.exits.filter(e => e.status === 'up');
+  return '<option value=""' + (currentHost ? '' : ' selected') + '>直连（不走隧道）</option>'
+    + up.map(e => '<option value="' + esc(e.host) + '"'
+        + (e.host === currentHost ? ' selected' : '') + '>'
+        + esc((e.exit_ip || e.host) + ' · ' + e.region) + '</option>').join('');
+}
+
 function renderDetail(d){
   const owner = view.exits.find(x => (x.inbounds || []).some(i => i.id === d.id));
-  const exit = owner ? esc((owner.exit_ip || owner.host) + '（' + owner.region + '）') : '直连';
 
   const clients = (d.clients || []).map((c, i) => {
     const link = (d.links || [])[i] || '';
@@ -800,7 +817,8 @@ function renderDetail(d){
 
   $('#dtitle').textContent = (d.remark || '节点') + '　:' + d.port;
   $('#dbody').innerHTML = '<dl class="kv">'
-    + '<dt>出口</dt><dd>' + exit + '</dd>'
+    + '<dt>出口</dt><dd><select id="dbind" data-tag="' + esc(d.tag) + '">'
+    +   exitOptions(owner ? owner.host : '') + '</select></dd>'
     + '<dt>协议</dt><dd>' + esc(d.protocol) + '　' + esc(d.network || '')
     +   (d.tls && d.tls !== 'none' ? '　' + esc(d.tls) : '') + '</dd>'
     + '<dt>监听</dt><dd>' + esc(d.listen || '0.0.0.0') + '</dd>'
@@ -820,6 +838,33 @@ function renderDetail(d){
     +   '<button id="dcadd">' + ICON.plus + '添加</button></div>'
     + (clients || '<div class="empty">没有客户端</div>');
 }
+
+// 未绑定区的出口下拉，选中即绑
+document.addEventListener('change', async e => {
+  const sel = e.target.closest('.obind');
+  if(!sel || !sel.value) return;
+  sel.disabled = true;
+  try{
+    await api('/api/xui/bind?tag=' + encodeURIComponent(sel.dataset.tag)
+      + '&host=' + encodeURIComponent(sel.value), {method:'POST'});
+    toast('已绑定');
+    poll();
+  }catch(err){ toast(err.message, true); sel.disabled = false; }
+});
+
+// 出口下拉改动即生效。绑定按 inboundTag 走，host 传空表示解绑回直连。
+document.addEventListener('change', async e => {
+  const sel = e.target.closest('#dbind');
+  if(!sel) return;
+  sel.disabled = true;
+  try{
+    await api('/api/xui/bind?tag=' + encodeURIComponent(sel.dataset.tag)
+      + '&host=' + encodeURIComponent(sel.value), {method:'POST'});
+    toast(sel.value ? '已绑定' : '已解绑');
+    poll();
+  }catch(err){ toast(err.message, true); }
+  sel.disabled = false;
+});
 
 document.addEventListener('click', async e => {
   const link = e.target.closest('[data-detail]');

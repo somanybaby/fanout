@@ -245,6 +245,12 @@ func (n *Native) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunne
 			Protocol: tpl.Protocol,
 			Network:  tpl.Network,
 			Path:     tpl.Path,
+			Host:     tpl.Host,
+			// 安全层必须跟着复制：漏掉的话从 REALITY/TLS 模板复制出来的
+			// 入站会变成明文，而分享链接照样标着模板的协议，很难发现
+			Security: tpl.Security,
+			TLS:      tpl.TLS,
+			Reality:  tpl.Reality,
 			Remark:   cloneRemark(tpl.Remark, exitLabel(t)),
 			Enable:   true,
 			Clients:  append([]nativeClient(nil), tpl.Clients...),

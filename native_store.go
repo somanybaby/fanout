@@ -18,22 +18,55 @@ type nativeClient struct {
 	ID       string `json:"id"`       // vless/vmess 用 UUID
 	Password string `json:"password"` // trojan 用密码
 	Enable   bool   `json:"enable"`
+	// Flow 只对 VLESS 有意义，取值 "" 或 xtls-rprx-vision。
+	// Vision 要求底层是 TCP + TLS/REALITY，其他组合下 Xray 会直接拒绝启动。
+	Flow string `json:"flow,omitempty"`
 }
 
 // nativeInbound 是自建模式下的一个入站。
 //
 // 字段刻意贴着 3x-ui 的入站语义，这样两种后端在界面上表现一致。
 type nativeInbound struct {
-	ID       int            `json:"id"`
-	Port     int            `json:"port"`
-	Protocol string         `json:"protocol"` // vless | vmess | trojan
-	Network  string         `json:"network"`  // tcp | ws
-	Path     string         `json:"path"`     // ws 路径
+	ID       int    `json:"id"`
+	Port     int    `json:"port"`
+	Protocol string `json:"protocol"` // vless | vmess | trojan
+	Network  string `json:"network"`  // tcp | ws | grpc | httpupgrade | xhttp
+	Path     string `json:"path"`     // ws/httpupgrade/xhttp 路径，grpc 用作 serviceName
+	Host     string `json:"host"`     // ws/httpupgrade/xhttp 的 Host 头
+	// Security 是传输层安全：none | tls | reality
+	Security string         `json:"security"`
+	TLS      *tlsConfig     `json:"tls,omitempty"`
+	Reality  *realityConfig `json:"reality,omitempty"`
 	Remark   string         `json:"remark"`
 	Enable   bool           `json:"enable"`
 	Clients  []nativeClient `json:"clients"`
 	// BoundTo 是绑定的节点主机名经 sanitizeTag 后的形式，空表示直连
 	BoundTo string `json:"bound_to"`
+}
+
+// tlsConfig 是标准 TLS 的配置。证书要么由用户提供路径，要么 fanout 生成自签的。
+type tlsConfig struct {
+	ServerName string `json:"server_name"`
+	CertFile   string `json:"cert_file"`
+	KeyFile    string `json:"key_file"`
+	// SelfSigned 记录证书是 fanout 生成的，分享链接要带 allowInsecure
+	SelfSigned bool `json:"self_signed"`
+	// CertSha256 是证书的 SHA-256 指纹（十六进制）。
+	// 自签证书客户端验不过，Xray 26.x 起 allowInsecure 已被移除，
+	// 改为在链接里带指纹让客户端固定信任这一张证书。
+	CertSha256 string `json:"cert_sha256,omitempty"`
+}
+
+// realityConfig 是 REALITY 的配置。
+//
+// PublicKey 服务端用不到，但客户端必须填，所以一并存下来供生成分享链接。
+type realityConfig struct {
+	Dest        string   `json:"dest"` // 借用的真实站点，如 www.microsoft.com:443
+	ServerNames []string `json:"server_names"`
+	PrivateKey  string   `json:"private_key"`
+	PublicKey   string   `json:"public_key"`
+	ShortIDs    []string `json:"short_ids"`
+	Fingerprint string   `json:"fingerprint"` // 客户端指纹，如 chrome
 }
 
 // tag 复原这个入站在 Xray 里的 inboundTag，格式与 3x-ui 保持一致。
@@ -46,6 +79,13 @@ func (n *nativeInbound) netOrTCP() string {
 		return "tcp"
 	}
 	return n.Network
+}
+
+func (n *nativeInbound) securityOrNone() string {
+	if n.Security == "" {
+		return "none"
+	}
+	return n.Security
 }
 
 // nativeStore 是自建模式的持久状态。

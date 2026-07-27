@@ -513,6 +513,18 @@ func apiInboundCreate(m *Manager) http.HandlerFunc {
 			Port:     port,
 			Remark:   q.Get("remark"),
 			Path:     q.Get("path"),
+			Host:     q.Get("host"),
+			Security: q.Get("security"),
+			Vision:   q.Get("vision") == "1",
+
+			ServerName: q.Get("sni"),
+			CertFile:   q.Get("cert"),
+			KeyFile:    q.Get("key"),
+
+			Dest:        q.Get("dest"),
+			ServerNames: q.Get("server_names"),
+			ShortID:     q.Get("sid"),
+			Fingerprint: q.Get("fp"),
 		}, m.Tunnels())
 		invalidateInbounds()
 		if err != nil {
@@ -524,6 +536,8 @@ func apiInboundCreate(m *Manager) http.HandlerFunc {
 			"port":     ib.Port,
 			"protocol": ib.Protocol,
 			"remark":   ib.Remark,
+			"network":  ib.netOrTCP(),
+			"security": ib.securityOrNone(),
 		})
 	}
 }

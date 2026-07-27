@@ -112,6 +112,7 @@ main{padding:14px 16px 40px;max-width:1180px;margin:0 auto}
   border-top:1px solid var(--line);background:var(--panel);border-radius:0 0 6px 6px}
 .count{color:var(--dim);font-size:11px}
 label.f{display:block;margin-bottom:16px}
+label.f[hidden]{display:none}
 label.f>span{display:block;color:var(--dim);font-size:11px;margin-bottom:6px}
 .regions{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));
   gap:6px;max-height:224px;overflow:auto}
@@ -125,14 +126,18 @@ label.f>span{display:block;color:var(--dim);font-size:11px;margin-bottom:6px}
 .stepper{display:flex;align-items:center;gap:0;width:fit-content;
   border:1px solid var(--line);border-radius:4px;overflow:hidden;background:#0e1116}
 .stepper button{border:0;border-radius:0;background:transparent;padding:5px 11px}
-.stepper input{width:56px;text-align:center;font:inherit;background:transparent;
+select,input[type=search],input[type=text]{font:inherit;background:#0e1116;
+  border:1px solid var(--line);color:var(--text);border-radius:4px;
+  padding:5px 8px;width:100%}
+select:focus,input[type=search]:focus,input[type=text]:focus{outline:none;border-color:var(--accent)}
+.stepper input[type=text]{width:56px;text-align:center;font:inherit;background:transparent;
   border:0;border-left:1px solid var(--line);border-right:1px solid var(--line);
   color:var(--text);padding:5px 0;font-variant-numeric:tabular-nums}
 .stepper input:focus{outline:none}
-select,input[type=search]{font:inherit;background:#0e1116;border:1px solid var(--line);
-  color:var(--text);border-radius:4px;padding:5px 8px;width:100%}
-select:focus,input[type=search]:focus{outline:none;border-color:var(--accent)}
 .hint{color:var(--dim);font-size:11px;margin-top:6px}
+label.chk{display:flex;align-items:center;gap:7px;color:var(--text);font-size:12px;
+  cursor:pointer;margin:0}
+label.chk input{margin:0}
 .hint.bad{color:var(--bad)}
 .kv{display:grid;grid-template-columns:76px 1fr;gap:5px 12px;margin:0 0 14px}
 .kv dt{color:var(--dim)}
@@ -262,7 +267,35 @@ textarea:focus{outline:none;border-color:var(--accent)}
         <select id="nnet">
           <option value="tcp">TCP</option>
           <option value="ws">WebSocket</option>
+          <option value="grpc">gRPC</option>
+          <option value="httpupgrade">HTTPUpgrade</option>
+          <option value="xhttp">XHTTP</option>
         </select>
+      </label>
+      <label class="f">
+        <span>安全</span>
+        <select id="nsec">
+          <option value="none">无</option>
+          <option value="tls">TLS</option>
+          <option value="reality">REALITY</option>
+        </select>
+        <div class="hint" id="nsechint"></div>
+      </label>
+      <label class="f" id="nvisionwrap" hidden>
+        <span>流控</span>
+        <label class="chk"><input type="checkbox" id="nvision"> xtls-rprx-vision</label>
+      </label>
+      <label class="f" id="nsniwrap" hidden>
+        <span>域名 SNI</span>
+        <input id="nsni" type="text" placeholder="留空用 localhost，将生成自签证书">
+      </label>
+      <label class="f" id="ndestwrap" hidden>
+        <span>借用站点</span>
+        <input id="ndest" type="text" placeholder="留空用 www.cloudflare.com:443">
+      </label>
+      <label class="f" id="npathwrap" hidden>
+        <span id="npathlabel">路径</span>
+        <input id="npath" type="text" placeholder="留空自动生成">
       </label>
       <label class="f">
         <span>端口</span>
@@ -550,22 +583,63 @@ document.addEventListener('click', e => {
 document.addEventListener('click', e => {
   if(e.target.closest('#newnode') || e.target.closest('#newnode2')){
     $('#nnhint').textContent = '';
+    syncNodeForm();
     openModal('newnodebox');
   }
 });
 
-$('#nnet').onchange = () => {
-  $('#nnhint').textContent = $('#nnet').value === 'ws'
-    ? 'WebSocket 路径会自动生成' : '';
-};
+// 表单随协议/传输/安全层联动：只露出当前组合真正用得到的字段
+function syncNodeForm(){
+  const proto = $('#nproto').value;
+  const net   = $('#nnet').value;
+  const sec   = $('#nsec').value;
+
+  // REALITY 靠模仿 TLS 握手工作，套在自带头部的传输上没有意义
+  const realityOK = net === 'tcp' || net === 'xhttp' || net === 'grpc';
+  // VMess 自身已有加密，再套一层没有收益
+  const secOK = proto !== 'vmess';
+  const secSel = $('#nsec');
+  secSel.disabled = !secOK;
+  if(!secOK && secSel.value !== 'none') secSel.value = 'none';
+  for(const o of secSel.options){
+    if(o.value === 'reality') o.disabled = !realityOK;
+  }
+  if(secSel.value === 'reality' && !realityOK) secSel.value = 'none';
+
+  const cur = secSel.value;
+  $('#nsniwrap').hidden  = cur !== 'tls';
+  $('#ndestwrap').hidden = cur !== 'reality';
+
+  // Vision 只在 VLESS + 裸 TCP + TLS/REALITY 下有效
+  const visionOK = proto === 'vless' && net === 'tcp' && cur !== 'none';
+  $('#nvisionwrap').hidden = !visionOK;
+  if(!visionOK) $('#nvision').checked = false;
+
+  const needPath = net === 'ws' || net === 'httpupgrade' || net === 'xhttp' || net === 'grpc';
+  $('#npathwrap').hidden = !needPath;
+  $('#npathlabel').textContent = net === 'grpc' ? '服务名' : '路径';
+
+  $('#nsechint').textContent =
+    cur === 'reality' ? '密钥与 shortId 自动生成' :
+    cur === 'tls'     ? '不填证书就用自签，链接会带证书指纹' :
+    !secOK            ? 'VMess 自带加密，不需要额外安全层' : '';
+}
+$('#nproto').onchange = syncNodeForm;
+$('#nnet').onchange = syncNodeForm;
+$('#nsec').onchange = syncNodeForm;
 
 $('#ncreate').onclick = async e => {
   const q = new URLSearchParams({
     protocol: $('#nproto').value,
     network:  $('#nnet').value,
+    security: $('#nsec').value,
     port:     ($('#nport').value || '').trim(),
     remark:   ($('#nremark').value || '').trim(),
+    path:     ($('#npath').value || '').trim(),
+    sni:      ($('#nsni').value || '').trim(),
+    dest:     ($('#ndest').value || '').trim(),
   });
+  if($('#nvision').checked) q.set('vision', '1');
   e.target.disabled = true;
   try{
     const r = await api('/api/panel/inbound/new?' + q.toString(), {method:'POST'});

@@ -118,21 +118,12 @@ func nativeInboundJSON(ib *nativeInbound) map[string]any {
 		case "vmess":
 			clients = append(clients, map[string]any{"id": c.ID, "email": c.Email})
 		default: // vless
-			clients = append(clients, map[string]any{"id": c.ID, "email": c.Email, "flow": ""})
+			clients = append(clients, map[string]any{"id": c.ID, "email": c.Email, "flow": c.Flow})
 		}
 	}
 	settings["clients"] = clients
 	if ib.Protocol == "vless" {
 		settings["decryption"] = "none"
-	}
-
-	stream := map[string]any{"network": ib.netOrTCP(), "security": "none"}
-	if ib.netOrTCP() == "ws" {
-		path := ib.Path
-		if path == "" {
-			path = "/"
-		}
-		stream["wsSettings"] = map[string]any{"path": path}
 	}
 
 	return map[string]any{
@@ -141,9 +132,79 @@ func nativeInboundJSON(ib *nativeInbound) map[string]any {
 		"port":           ib.Port,
 		"protocol":       ib.Protocol,
 		"settings":       settings,
-		"streamSettings": stream,
+		"streamSettings": streamSettingsJSON(ib),
 		"sniffing":       map[string]any{"enabled": true, "destOverride": []any{"http", "tls"}},
 	}
+}
+
+// streamSettingsJSON 生成传输层配置：网络类型 + 安全层。
+func streamSettingsJSON(ib *nativeInbound) map[string]any {
+	network := ib.netOrTCP()
+	stream := map[string]any{"network": network, "security": ib.securityOrNone()}
+
+	path := ib.Path
+	if path == "" {
+		path = "/"
+	}
+	switch network {
+	case "ws":
+		ws := map[string]any{"path": path}
+		if ib.Host != "" {
+			ws["host"] = ib.Host
+		}
+		stream["wsSettings"] = ws
+	case "httpupgrade":
+		hu := map[string]any{"path": path}
+		if ib.Host != "" {
+			hu["host"] = ib.Host
+		}
+		stream["httpupgradeSettings"] = hu
+	case "xhttp":
+		xh := map[string]any{"path": path, "mode": "auto"}
+		if ib.Host != "" {
+			xh["host"] = ib.Host
+		}
+		stream["xhttpSettings"] = xh
+	case "grpc":
+		// gRPC 没有 path，用 serviceName 区分；沿用 Path 字段少一个概念
+		name := strings.TrimPrefix(ib.Path, "/")
+		stream["grpcSettings"] = map[string]any{"serviceName": name}
+	}
+
+	switch ib.securityOrNone() {
+	case "tls":
+		if ib.TLS != nil {
+			t := map[string]any{
+				"certificates": []any{map[string]any{
+					"certificateFile": ib.TLS.CertFile,
+					"keyFile":         ib.TLS.KeyFile,
+				}},
+			}
+			if ib.TLS.ServerName != "" {
+				t["serverName"] = ib.TLS.ServerName
+			}
+			stream["tlsSettings"] = t
+		}
+	case "reality":
+		if ib.Reality != nil {
+			r := map[string]any{
+				"dest":        ib.Reality.Dest,
+				"serverNames": toAnySlice(ib.Reality.ServerNames),
+				"privateKey":  ib.Reality.PrivateKey,
+				"shortIds":    toAnySlice(ib.Reality.ShortIDs),
+			}
+			stream["realitySettings"] = r
+		}
+	}
+	return stream
+}
+
+func toAnySlice(in []string) []any {
+	out := make([]any, 0, len(in))
+	for _, s := range in {
+		out = append(out, s)
+	}
+	return out
 }
 
 // writeXrayConfig 把配置写到磁盘，返回配置路径。

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 )
@@ -282,12 +283,30 @@ func (n *Native) DeleteInbounds(ids []int, tunnels []*Tunnel) error {
 }
 
 // NewInboundSpec 是自建模式下新建入站的参数。
+//
+// 留空的字段都有合理默认：端口随机、备注按协议加端口自动生成、
+// 路径随机、REALITY 的密钥与 shortId 自动生成。
 type NewInboundSpec struct {
 	Protocol string
 	Network  string
 	Port     int
 	Remark   string
 	Path     string
+	Host     string
+	Security string
+	// Vision 请求给 VLESS 客户端启用 xtls-rprx-vision
+	Vision bool
+
+	// TLS：留空 CertFile 就生成自签证书
+	ServerName string
+	CertFile   string
+	KeyFile    string
+
+	// REALITY
+	Dest        string
+	ServerNames string // 逗号分隔，留空则从 Dest 推出来
+	ShortID     string
+	Fingerprint string
 }
 
 // nativeProtocols 是自建模式支持的协议，与前端下拉保持一致。
@@ -309,8 +328,23 @@ func (n *Native) CreateInbound(spec NewInboundSpec, tunnels []*Tunnel) (*nativeI
 	if network == "" {
 		network = "tcp"
 	}
-	if network != "tcp" && network != "ws" {
+	if !nativeNetworks[network] {
 		return nil, fmt.Errorf("不支持的传输方式 %q", spec.Network)
+	}
+	security := strings.ToLower(strings.TrimSpace(spec.Security))
+	if security == "" {
+		security = "none"
+	}
+	if !nativeSecurities[security] {
+		return nil, fmt.Errorf("不支持的安全层 %q", spec.Security)
+	}
+	// REALITY 靠模仿 TLS 握手工作，套在 ws/grpc 这类已有自己头部的传输上没有意义，
+	// Xray 也不接受这种组合
+	if security == "reality" && network != "tcp" && network != "xhttp" && network != "grpc" {
+		return nil, fmt.Errorf("REALITY 不支持 %s 传输", network)
+	}
+	if security != "none" && proto == "vmess" {
+		return nil, fmt.Errorf("VMess 请用 none，加密交给协议自身")
 	}
 
 	used := n.store.usedPorts()
@@ -325,9 +359,14 @@ func (n *Native) CreateInbound(spec NewInboundSpec, tunnels []*Tunnel) (*nativeI
 		return nil, fmt.Errorf("端口 %d 已被别的入站占用", port)
 	}
 
-	path := spec.Path
-	if network == "ws" && path == "" {
-		path = "/" + randomHex(6)
+	path := strings.TrimSpace(spec.Path)
+	if path == "" {
+		switch network {
+		case "ws", "httpupgrade", "xhttp":
+			path = "/" + randomHex(6)
+		case "grpc":
+			path = randomHex(6)
+		}
 	}
 
 	remark := strings.TrimSpace(spec.Remark)
@@ -341,15 +380,42 @@ func (n *Native) CreateInbound(spec NewInboundSpec, tunnels []*Tunnel) (*nativeI
 		Protocol: proto,
 		Network:  network,
 		Path:     path,
+		Host:     strings.TrimSpace(spec.Host),
+		Security: security,
 		Remark:   remark,
 		Enable:   true,
-		Clients: []nativeClient{{
-			Email:    fmt.Sprintf("%s-%d", proto, port),
-			ID:       newUUID(),
-			Password: randomHex(8),
-			Enable:   true,
-		}},
 	}
+
+	switch security {
+	case "tls":
+		conf, err := n.buildTLS(spec)
+		if err != nil {
+			return nil, err
+		}
+		ib.TLS = conf
+	case "reality":
+		conf, err := n.buildReality(spec)
+		if err != nil {
+			return nil, err
+		}
+		ib.Reality = conf
+	}
+
+	flow := ""
+	if spec.Vision {
+		if !visionCapable(proto, network, security) {
+			return nil, fmt.Errorf("xtls-rprx-vision 只能用于 VLESS + TCP + TLS/REALITY")
+		}
+		flow = "xtls-rprx-vision"
+	}
+	ib.Clients = []nativeClient{{
+		Email:    fmt.Sprintf("%s-%d", proto, port),
+		ID:       newUUID(),
+		Password: randomHex(8),
+		Flow:     flow,
+		Enable:   true,
+	}}
+
 	n.store.NextID++
 	n.store.Inbounds = append(n.store.Inbounds, ib)
 
@@ -374,12 +440,56 @@ func cloneRemark(base, label string) string {
 
 // shareLink 生成客户端可直接导入的分享链接。
 func shareLink(ib *nativeInbound, c nativeClient, host string) string {
+	net := ib.netOrTCP()
+	sec := ib.securityOrNone()
+
 	q := url.Values{}
-	q.Set("type", ib.netOrTCP())
-	q.Set("security", "none")
-	if ib.netOrTCP() == "ws" {
+	q.Set("type", net)
+	q.Set("security", sec)
+
+	switch net {
+	case "ws", "httpupgrade", "xhttp":
 		q.Set("path", ib.Path)
+		if ib.Host != "" {
+			q.Set("host", ib.Host)
+		}
+	case "grpc":
+		q.Set("serviceName", strings.TrimPrefix(ib.Path, "/"))
 	}
+
+	switch sec {
+	case "tls":
+		if ib.TLS != nil {
+			if ib.TLS.ServerName != "" {
+				q.Set("sni", ib.TLS.ServerName)
+			}
+			// 自签证书验不过 CA。Xray 26.x 移除了 allowInsecure，
+			// 改用证书指纹让客户端固定信任这一张。
+			if ib.TLS.SelfSigned && ib.TLS.CertSha256 != "" {
+				q.Set("pinSHA256", ib.TLS.CertSha256)
+			}
+		}
+	case "reality":
+		if ib.Reality != nil {
+			if len(ib.Reality.ServerNames) > 0 {
+				q.Set("sni", ib.Reality.ServerNames[0])
+			}
+			// pbk 是分享链接的通用写法，各家客户端都认；
+			// 注意 Xray 26.x 自己的配置文件里这个字段叫 password 而不是 publicKey
+			q.Set("pbk", ib.Reality.PublicKey)
+			if len(ib.Reality.ShortIDs) > 0 {
+				q.Set("sid", ib.Reality.ShortIDs[0])
+			}
+			if ib.Reality.Fingerprint != "" {
+				q.Set("fp", ib.Reality.Fingerprint)
+			}
+		}
+	}
+
+	if c.Flow != "" && ib.Protocol == "vless" {
+		q.Set("flow", c.Flow)
+	}
+
 	frag := url.PathEscape(ib.Remark)
 
 	switch ib.Protocol {
@@ -393,4 +503,89 @@ func shareLink(ib *nativeInbound, c nativeClient, host string) string {
 		q.Set("encryption", "none")
 		return fmt.Sprintf("vless://%s@%s:%d?%s#%s", c.ID, host, ib.Port, q.Encode(), frag)
 	}
+}
+
+// buildTLS 组装 TLS 配置。没给证书路径就生成一张自签的。
+func (n *Native) buildTLS(spec NewInboundSpec) (*tlsConfig, error) {
+	name := strings.TrimSpace(spec.ServerName)
+	if name == "" {
+		name = "localhost"
+	}
+	conf := &tlsConfig{ServerName: name}
+
+	cert, key := strings.TrimSpace(spec.CertFile), strings.TrimSpace(spec.KeyFile)
+	if cert != "" && key != "" {
+		if _, err := os.Stat(cert); err != nil {
+			return nil, fmt.Errorf("证书文件不可读: %w", err)
+		}
+		if _, err := os.Stat(key); err != nil {
+			return nil, fmt.Errorf("私钥文件不可读: %w", err)
+		}
+		conf.CertFile, conf.KeyFile = cert, key
+		return conf, nil
+	}
+
+	// 自签证书客户端验不过，分享链接里要带 allowInsecure
+	c, k, err := selfSignedCert(n.dir, name)
+	if err != nil {
+		return nil, err
+	}
+	conf.CertFile, conf.KeyFile, conf.SelfSigned = c, k, true
+	// 指纹是自签证书唯一能让客户端验过的凭据，算不出来就没法生成可用链接
+	fp, err := certFingerprint(c)
+	if err != nil {
+		return nil, err
+	}
+	conf.CertSha256 = fp
+	return conf, nil
+}
+
+// buildReality 组装 REALITY 配置，密钥和 shortId 都自动生成。
+func (n *Native) buildReality(spec NewInboundSpec) (*realityConfig, error) {
+	dest := strings.TrimSpace(spec.Dest)
+	if dest == "" {
+		// REALITY 要跟 dest 完成一次真实 TLS1.3 握手，dest 不稳会让所有连接
+		// 静默回落。microsoft.com 在部分机房握手经常走不完，这里选更可靠的。
+		dest = "www.cloudflare.com:443"
+	}
+	if !strings.Contains(dest, ":") {
+		dest += ":443"
+	}
+
+	var names []string
+	for _, s := range strings.Split(spec.ServerNames, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			names = append(names, s)
+		}
+	}
+	if len(names) == 0 {
+		// 默认用 dest 的主机名：REALITY 要求 SNI 与被借用的站点一致
+		names = []string{strings.SplitN(dest, ":", 2)[0]}
+	}
+
+	priv, pub, err := realityKeys(n.proc.bin)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkRealityDest(dest, names[0]); err != nil {
+		return nil, fmt.Errorf("REALITY 目标站点不可用，换一个 dest: %w", err)
+	}
+
+	short := strings.TrimSpace(spec.ShortID)
+	if short == "" {
+		short = randomShortID()
+	}
+	fp := strings.TrimSpace(spec.Fingerprint)
+	if fp == "" {
+		fp = "chrome"
+	}
+
+	return &realityConfig{
+		Dest:        dest,
+		ServerNames: names,
+		PrivateKey:  priv,
+		PublicKey:   pub,
+		ShortIDs:    []string{short},
+		Fingerprint: fp,
+	}, nil
 }

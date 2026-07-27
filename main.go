@@ -23,6 +23,7 @@ func main() {
 		maxSlots = flag.Int("max", 20, "最多同时运行的隧道数")
 		workDir  = flag.String("dir", "/var/lib/fanout", "工作目录")
 	)
+	panelMode := flag.String("panel", "", "节点链接后端: 留空自动探测, 3x-ui, native")
 	showVersion := flag.Bool("version", false, "显示版本后退出")
 	flag.Parse()
 
@@ -39,6 +40,13 @@ func main() {
 	}
 	if err := prepareHost(); err != nil {
 		log.Fatal(err)
+	}
+
+	configurePanel(*workDir, *panelMode)
+	if p, err := openPanel(); err != nil {
+		log.Printf("节点链接后端暂不可用（可在 Web 界面查看原因）: %v", err)
+	} else {
+		log.Printf("节点链接后端: %s", p.Describe())
 	}
 
 	mgr := NewManager(*maxSlots, *workDir)
@@ -63,6 +71,7 @@ func main() {
 		<-stop
 		log.Println("正在清理所有隧道...")
 		mgr.Shutdown()
+		closePanel()
 		os.Exit(0)
 	}()
 
@@ -86,6 +95,7 @@ func main() {
 	mux.HandleFunc("/api/xui/detail", apiXUIDetail)
 	mux.HandleFunc("/api/xui/links", apiXUILinks)
 	mux.HandleFunc("/api/xui/delete", apiXUIDelete(mgr))
+	mux.HandleFunc("/api/panel/inbound/new", apiInboundCreate(mgr))
 
 	auth, created, err := NewAuth(*workDir)
 	if err != nil {
@@ -255,9 +265,9 @@ func apiJobDismiss(m *Manager) http.HandlerFunc {
 	}
 }
 
-// apiXUIStatus 报告本机 3x-ui 的探测结果。
+// apiXUIStatus 报告当前的节点链接后端：接管的 3x-ui，或 fanout 自己跑的 Xray。
 func apiXUIStatus(w http.ResponseWriter, r *http.Request) {
-	x, err := DetectXUI()
+	p, err := openPanel()
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"available": false,
@@ -265,13 +275,20 @@ func apiXUIStatus(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"available": true,
-		"port":      x.Port,
-		"base_path": x.BasePath,
-		"scheme":    x.Scheme,
-		"host":      x.Host,
-	})
+		"kind":      p.Kind(),
+		"describe":  p.Describe(),
+		// 自建模式下界面要能自己建入站；3x-ui 模式沿用面板里已有的入站做模板
+		"can_create": p.Kind() == "native",
+	}
+	if x, ok := p.(*XUI); ok {
+		resp["port"] = x.Port
+		resp["base_path"] = x.BasePath
+		resp["scheme"] = x.Scheme
+		resp["host"] = x.Host
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // apiXUIInbounds 列出面板里已有的入站及其绑定状态。
@@ -306,7 +323,7 @@ func apiXUIBind(m *Manager) http.HandlerFunc {
 			return
 		}
 		host := r.URL.Query().Get("host")
-		x, err := DetectXUI()
+		x, err := openPanel()
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 			return
@@ -350,7 +367,7 @@ func apiXUIClone(m *Manager) http.HandlerFunc {
 			return
 		}
 
-		x, err := DetectXUI()
+		x, err := openPanel()
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 			return
@@ -372,7 +389,7 @@ func apiXUIDetail(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id 参数无效"})
 		return
 	}
-	x, err := DetectXUI()
+	x, err := openPanel()
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
@@ -403,7 +420,7 @@ func publicHost(r *http.Request) string {
 
 // apiXUILinks 批量导出多个入站的分享链接。
 func apiXUILinks(w http.ResponseWriter, r *http.Request) {
-	x, err := DetectXUI()
+	x, err := openPanel()
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
@@ -456,7 +473,7 @@ func apiXUIDelete(m *Manager) http.HandlerFunc {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "没有指定要删除的入站"})
 			return
 		}
-		x, err := DetectXUI()
+		x, err := openPanel()
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 			return
@@ -468,5 +485,45 @@ func apiXUIDelete(m *Manager) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]int{"deleted": len(ids)})
+	}
+}
+
+// apiInboundCreate 新建一个入站。只有自建模式提供这个能力：
+// 装了 3x-ui 时入站应当在面板里建，fanout 不去插手它的数据。
+func apiInboundCreate(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p, err := openPanel()
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		native, ok := p.(*Native)
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "当前接管的是 3x-ui，请在面板里新建入站",
+			})
+			return
+		}
+
+		q := r.URL.Query()
+		port, _ := strconv.Atoi(q.Get("port"))
+		ib, err := native.CreateInbound(NewInboundSpec{
+			Protocol: q.Get("protocol"),
+			Network:  q.Get("network"),
+			Port:     port,
+			Remark:   q.Get("remark"),
+			Path:     q.Get("path"),
+		}, m.Tunnels())
+		invalidateInbounds()
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"id":       ib.ID,
+			"port":     ib.Port,
+			"protocol": ib.Protocol,
+			"remark":   ib.Remark,
+		})
 	}
 }

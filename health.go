@@ -80,7 +80,9 @@ func (m *Manager) reconnect(t *Tunnel, oldHost string) {
 	t.teardownNetns()
 
 	go func() {
-		m.bringUp(t)
+		// 通知延后到 rebind/resync 之后：那两步会把入站改绑到新节点，
+		// 提前重建配置会因为入站还指着旧节点名而丢掉路由规则
+		m.bringUp(t, false)
 		if t.Status != "up" {
 			return
 		}

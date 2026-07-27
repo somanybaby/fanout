@@ -98,11 +98,16 @@ func (m *Manager) Start(node Node) (*Tunnel, error) {
 	m.tunnels[slot] = t
 	m.mu.Unlock()
 
-	go m.bringUp(t)
+	go m.bringUp(t, true)
 	return t, nil
 }
 
-func (m *Manager) bringUp(t *Tunnel) {
+// bringUp 把一条隧道拉起来。
+//
+// notify 决定成功后是否立刻重建后端配置。换节点重连时要传 false：
+// 那条路径随后会调 rebind/resync 把入站改绑到新节点，在那之前重建配置
+// 会因为入站还指着旧节点名而把路由规则丢掉。
+func (m *Manager) bringUp(t *Tunnel, notify bool) {
 	// VPN Gate 是志愿者节点，列表里有相当比例已下线或满员（AUTH_FAILED），
 	// 连不上就顺着候选列表换下一个，不必让用户手动试。
 	candidates := m.candidatesFor(t.Node)
@@ -125,6 +130,9 @@ func (m *Manager) bringUp(t *Tunnel) {
 			t.Err = ""
 			if serr := m.saveState(); serr != nil {
 				log.Printf("保存状态失败: %v", serr)
+			}
+			if notify {
+				m.notifyPanel()
 			}
 			return
 		}
@@ -218,6 +226,7 @@ func (m *Manager) Stop(slot int) error {
 	if err := m.saveState(); err != nil {
 		log.Printf("保存状态失败: %v", err)
 	}
+	m.notifyPanel()
 	return nil
 }
 
@@ -284,7 +293,7 @@ func (m *Manager) nodeInUse(host string, exceptSlot int) bool {
 // rebind 在隧道换节点后，把原先指向旧节点的 3x-ui 入站改绑到新节点。
 // 面板不可用时静默跳过，健康检查本身不应因此失败。
 func (m *Manager) rebind(oldHost string, t *Tunnel) error {
-	x, err := DetectXUI()
+	x, err := openPanel()
 	if err != nil {
 		return nil
 	}
@@ -294,9 +303,24 @@ func (m *Manager) rebind(oldHost string, t *Tunnel) error {
 // resync 在节点没换但重连过之后，把 3x-ui 的出站配置刷新一遍。
 // 面板不可用时静默跳过，健康检查本身不应因此失败。
 func (m *Manager) resync(t *Tunnel) error {
-	x, err := DetectXUI()
+	x, err := openPanel()
 	if err != nil {
 		return nil
 	}
 	return x.ResyncOutbound(t, m.Tunnels())
+}
+
+// notifyPanel 告诉后端隧道集合变了。
+//
+// 自建模式下出站是由隧道列表现算出来的，不通知的话新开的出口在 Xray 里
+// 没有对应的 socks 出站，绑定会指向一个不存在的 tag。接管 3x-ui 时是空操作。
+// 后端不可用不该让开关出口失败，所以只记日志。
+func (m *Manager) notifyPanel() {
+	p, err := openPanel()
+	if err != nil {
+		return
+	}
+	if err := p.OnTunnelsChanged(m.Tunnels()); err != nil {
+		log.Printf("同步节点链接后端失败: %v", err)
+	}
 }

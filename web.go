@@ -181,6 +181,10 @@ textarea:focus{outline:none;border-color:var(--accent)}
       <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
       全部停止
     </button>
+    <button id="newnode" hidden title="新建一个节点（协议与端口）">
+      <svg viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/></svg>
+      新建节点
+    </button>
     <button class="primary" id="newexit">
       <svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
       新建出口
@@ -231,6 +235,49 @@ textarea:focus{outline:none;border-color:var(--accent)}
       <span class="spacer"></span>
       <button data-close="wizard">取消</button>
       <button class="primary" id="go">开始</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="newnodebox">
+  <div class="sheet">
+    <div class="head">
+      <h2>新建节点</h2>
+      <span class="spacer"></span>
+      <button class="icon" data-close="newnodebox" title="关闭">
+        <svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+    <div class="body">
+      <label class="f">
+        <span>协议</span>
+        <select id="nproto">
+          <option value="vless">VLESS</option>
+          <option value="vmess">VMess</option>
+          <option value="trojan">Trojan</option>
+        </select>
+      </label>
+      <label class="f">
+        <span>传输</span>
+        <select id="nnet">
+          <option value="tcp">TCP</option>
+          <option value="ws">WebSocket</option>
+        </select>
+      </label>
+      <label class="f">
+        <span>端口</span>
+        <input id="nport" type="text" inputmode="numeric" placeholder="留空随机分配">
+      </label>
+      <label class="f">
+        <span>备注</span>
+        <input id="nremark" type="text" placeholder="留空自动命名">
+      </label>
+    </div>
+    <div class="foot">
+      <span class="count" id="nnhint"></span>
+      <span class="spacer"></span>
+      <button data-close="newnodebox">取消</button>
+      <button class="primary" id="ncreate">创建</button>
     </div>
   </div>
 </div>
@@ -305,8 +352,13 @@ async function copy(text){
   catch(e){ toast('复制失败，请手动选中', true); }
 }
 
-let view = {exits:[], direct:[], panel:''};
+let view = {exits:[], direct:[], panel:'', backend:''};
 let inbounds = [];
+
+// 自建模式下入站由 fanout 自己管，界面要提供新建入口；
+// 接管 3x-ui 时入站归面板管，这里只读不写。
+function isNative(){ return view.backend === 'native'; }
+function backendName(){ return isNative() ? '自建 Xray' : '3x-ui'; }
 
 const STATUS = {up:'已连通', starting:'连接中', failed:'失败', stopped:'已停止'};
 
@@ -316,6 +368,8 @@ function renderExits(){
   $('#ecount').textContent = n ? n + ' 个' : '';
   $('#exportAll').disabled = !view.exits.some(e => e.inbounds && e.inbounds.length);
   $('#stopall').disabled = !n;
+  // 接管 3x-ui 时入站归面板管，只有自建模式才由 fanout 建节点
+  $('#newnode').hidden = !isNative();
 
   if(!n){
     list.innerHTML = '<div class="empty">还没有出口'
@@ -361,7 +415,7 @@ function renderOrphans(){
   box.innerHTML = '<div class="orphan"><div class="top">'
     + '<h3>未绑定出口的入站</h3><span class="count">' + list.length + ' 个，走直连</span>'
     + '<span class="spacer"></span>'
-    + '<button data-delorphans="1" title="从 3x-ui 删除这些入站">'
+    + '<button data-delorphans="1" title="删除这些入站">'
     + ICON.trash + '清理</button></div>'
     + '<div class="chips">' + list.map(i =>
         '<button class="chip" data-detail="' + i.id + '" title="'
@@ -391,7 +445,9 @@ function renderJobs(jobs){
 async function poll(){
   try{
     view = await api('/api/exits');
-    $('#panel').textContent = view.panel ? '3x-ui: ' + view.panel : '';
+    $('#panel').textContent = view.panel
+      ? (backendName() + ': ' + view.panel)
+      : (view.panel_info || '');
     renderExits();
     renderOrphans();
   }catch(e){}
@@ -461,8 +517,10 @@ async function loadWizard(){
     const bound = (v.exits || []).flatMap(e => e.inbounds || []);
     inbounds = free.concat(bound);
     if(!inbounds.length){
-      sel.innerHTML = '<option value="0">面板里还没有入站</option>';
-      $('#tplhint').textContent = '先在 3x-ui 建一个入站，之后这里可以按它批量生成';
+      sel.innerHTML = '<option value="0">还没有节点</option>';
+      $('#tplhint').textContent = isNative()
+        ? '先用上面的「新建节点」建一个，之后这里可以按它批量生成'
+        : '先在 3x-ui 建一个入站，之后这里可以按它批量生成';
       return;
     }
     const opt = i => '<option value="' + i.id + '">'
@@ -474,7 +532,7 @@ async function loadWizard(){
       + '<option value="0">只开出口，不建节点</option>';
     $('#tplhint').textContent = '每个出口复制一份，客户端 UUID 保持一致，只有端口不同';
   }catch(e){
-    sel.innerHTML = '<option value="0">面板不可用</option>';
+    sel.innerHTML = '<option value="0">' + backendName() + '不可用</option>';
     $('#tplhint').textContent = e.message;
   }
 }
@@ -487,6 +545,38 @@ document.addEventListener('click', e => {
   const rg = e.target.closest('[data-rg]');
   if(rg){ region = rg.dataset.rg; renderRegions(); }
 });
+
+// ---- 新建节点（仅自建模式）----
+document.addEventListener('click', e => {
+  if(e.target.closest('#newnode') || e.target.closest('#newnode2')){
+    $('#nnhint').textContent = '';
+    openModal('newnodebox');
+  }
+});
+
+$('#nnet').onchange = () => {
+  $('#nnhint').textContent = $('#nnet').value === 'ws'
+    ? 'WebSocket 路径会自动生成' : '';
+};
+
+$('#ncreate').onclick = async e => {
+  const q = new URLSearchParams({
+    protocol: $('#nproto').value,
+    network:  $('#nnet').value,
+    port:     ($('#nport').value || '').trim(),
+    remark:   ($('#nremark').value || '').trim(),
+  });
+  e.target.disabled = true;
+  try{
+    const r = await api('/api/panel/inbound/new?' + q.toString(), {method:'POST'});
+    toast('已创建 ' + r.protocol + ' 节点，端口 ' + r.port);
+    closeModal('newnodebox');
+    $('#nport').value = '';
+    $('#nremark').value = '';
+    poll();
+  }catch(err){ toast(err.message, true); }
+  e.target.disabled = false;
+};
 
 $('#rgfilter').oninput = renderRegions;
 $('#minus').onclick = () => { step(-1); };
@@ -540,7 +630,7 @@ document.addEventListener('click', async e => {
   const del = e.target.closest('[data-delorphans]');
   if(del){
     const list = view.direct || [];
-    if(!confirm('从 3x-ui 删除这 ' + list.length + ' 个未绑定入站？此操作不可撤销。')) return;
+    if(!confirm('删除这 ' + list.length + ' 个未绑定节点？此操作不可撤销。')) return;
     del.disabled = true;
     try{
       await api('/api/xui/delete?ids=' + list.map(i => i.id).join(','), {method:'POST'});

@@ -31,6 +31,12 @@ func (x *XUI) base() string {
 	return fmt.Sprintf("%s://%s:%d%s", x.Scheme, x.Host, x.Port, x.BasePath)
 }
 
+func (x *XUI) Kind() string { return "3x-ui" }
+
+func (x *XUI) Describe() string {
+	return fmt.Sprintf("接管本机 3x-ui 面板（%s:%d）", x.Host, x.Port)
+}
+
 const (
 	// 面板主程序，用来读设置和取 API token
 	xuiBinary = "/usr/local/x-ui/x-ui"
@@ -1097,6 +1103,13 @@ func isAllDigits(s string) bool {
 	}
 	return true
 }
+
+// OnTunnelsChanged 对 3x-ui 是空操作：出站在 Bind/CloneToTunnels 里已经顺带
+// 同步过，这里再写一次只会多重启一遍面板的 Xray，把已有连接打断。
+func (x *XUI) OnTunnelsChanged(tunnels []*Tunnel) error { return nil }
+
+// Close 对 3x-ui 是空操作：Xray 由面板自己管，不该被 fanout 停掉。
+func (x *XUI) Close() {}
 
 // ResyncOutbound 重写某条隧道对应的出站配置。
 // 用于隧道原地重连（节点名没变）后刷新端口等信息。

@@ -91,7 +91,7 @@ func (m *Manager) runProvision(job *Job, picks []Node, templateID int) {
 	}
 
 	job.Set(step, "running", fmt.Sprintf("为 %d 个出口建入站", len(hosts)))
-	x, err := DetectXUI()
+	x, err := openPanel()
 	if err != nil {
 		job.Set(step, "failed", err.Error())
 		return

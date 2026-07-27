@@ -36,6 +36,11 @@ type ExitsView struct {
 	// Direct 是没绑到任何出口的入站，仍然要能看见，否则用户会以为它们不见了
 	Direct []ExitInbound `json:"direct"`
 	Panel  string        `json:"panel"` // 面板不可用时的原因，空表示正常
+	// Backend 是 "3x-ui" 或 "native"。界面据此决定是否提供新建入站入口：
+	// 接管面板时入站归面板管，自建模式才由 fanout 自己建。
+	Backend string `json:"backend"`
+	// PanelInfo 是后端的一行说明，显示在标题旁
+	PanelInfo string `json:"panel_info"`
 }
 
 // inboundCache 给入站列表做很短的缓存。界面每几秒轮询一次，
@@ -59,7 +64,7 @@ func cachedInbounds(live map[string]bool) ([]Inbound, error) {
 	}
 
 	var list []Inbound
-	x, err := DetectXUI()
+	x, err := openPanel()
 	if err == nil {
 		list, err = x.Inbounds(live)
 	}
@@ -78,6 +83,12 @@ func invalidateInbounds() {
 func (m *Manager) ExitsOf() ExitsView {
 	tunnels := m.Tunnels()
 	view := ExitsView{Exits: make([]Exit, 0, len(tunnels))}
+
+	// 先填后端类型：入站读取失败时界面仍要知道当前是哪种模式
+	if p, err := openPanel(); err == nil {
+		view.Backend = p.Kind()
+		view.PanelInfo = p.Describe()
+	}
 
 	live := map[string]bool{}
 	for _, t := range tunnels {

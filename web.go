@@ -289,9 +289,17 @@ textarea:focus{outline:none;border-color:var(--accent)}
         <span>域名 SNI</span>
         <input id="nsni" type="text" placeholder="留空用 localhost，将生成自签证书">
       </label>
+      <label class="f" id="ncertwrap" hidden>
+        <span>证书路径</span>
+        <input id="ncert" type="text" placeholder="留空生成自签证书，如 /etc/ssl/x.crt">
+      </label>
+      <label class="f" id="nkeywrap" hidden>
+        <span>私钥路径</span>
+        <input id="nkey" type="text" placeholder="与证书成对填写，如 /etc/ssl/x.key">
+      </label>
       <label class="f" id="ndestwrap" hidden>
         <span>借用站点</span>
-        <input id="ndest" type="text" placeholder="留空用 www.cloudflare.com:443">
+        <input id="ndest" type="text" placeholder="留空用 www.tesla.com:443">
       </label>
       <label class="f" id="npathwrap" hidden>
         <span id="npathlabel">路径</span>
@@ -596,11 +604,7 @@ function syncNodeForm(){
 
   // REALITY 靠模仿 TLS 握手工作，套在自带头部的传输上没有意义
   const realityOK = net === 'tcp' || net === 'xhttp' || net === 'grpc';
-  // VMess 自身已有加密，再套一层没有收益
-  const secOK = proto !== 'vmess';
   const secSel = $('#nsec');
-  secSel.disabled = !secOK;
-  if(!secOK && secSel.value !== 'none') secSel.value = 'none';
   for(const o of secSel.options){
     if(o.value === 'reality') o.disabled = !realityOK;
   }
@@ -608,6 +612,8 @@ function syncNodeForm(){
 
   const cur = secSel.value;
   $('#nsniwrap').hidden  = cur !== 'tls';
+  $('#ncertwrap').hidden = cur !== 'tls';
+  $('#nkeywrap').hidden  = cur !== 'tls';
   $('#ndestwrap').hidden = cur !== 'reality';
 
   // Vision 只在 VLESS + 裸 TCP + TLS/REALITY 下有效
@@ -621,8 +627,7 @@ function syncNodeForm(){
 
   $('#nsechint').textContent =
     cur === 'reality' ? '密钥与 shortId 自动生成' :
-    cur === 'tls'     ? '不填证书就用自签，链接会带证书指纹' :
-    !secOK            ? 'VMess 自带加密，不需要额外安全层' : '';
+    cur === 'tls'     ? '不填证书就用自签，链接会带证书指纹' : '';
 }
 $('#nproto').onchange = syncNodeForm;
 $('#nnet').onchange = syncNodeForm;
@@ -637,6 +642,8 @@ $('#ncreate').onclick = async e => {
     remark:   ($('#nremark').value || '').trim(),
     path:     ($('#npath').value || '').trim(),
     sni:      ($('#nsni').value || '').trim(),
+    cert:     ($('#ncert').value || '').trim(),
+    key:      ($('#nkey').value || '').trim(),
     dest:     ($('#ndest').value || '').trim(),
   });
   if($('#nvision').checked) q.set('vision', '1');

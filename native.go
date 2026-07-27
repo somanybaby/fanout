@@ -343,9 +343,8 @@ func (n *Native) CreateInbound(spec NewInboundSpec, tunnels []*Tunnel) (*nativeI
 	if security == "reality" && network != "tcp" && network != "xhttp" && network != "grpc" {
 		return nil, fmt.Errorf("REALITY 不支持 %s 传输", network)
 	}
-	if security != "none" && proto == "vmess" {
-		return nil, fmt.Errorf("VMess 请用 none，加密交给协议自身")
-	}
+	// VMess 自带加密，但 TLS 在这里是为了流量伪装而不是加密强度，
+	// vmess+ws+tls 是很常见的组合，不该拦。
 
 	used := n.store.usedPorts()
 	port := spec.Port
@@ -514,6 +513,10 @@ func (n *Native) buildTLS(spec NewInboundSpec) (*tlsConfig, error) {
 	conf := &tlsConfig{ServerName: name}
 
 	cert, key := strings.TrimSpace(spec.CertFile), strings.TrimSpace(spec.KeyFile)
+	// 只填一个多半是漏填，静默退回自签会让用户以为用上了自己的证书
+	if (cert == "") != (key == "") {
+		return nil, fmt.Errorf("证书和私钥要成对填写，或者都留空用自签证书")
+	}
 	if cert != "" && key != "" {
 		if _, err := os.Stat(cert); err != nil {
 			return nil, fmt.Errorf("证书文件不可读: %w", err)
@@ -525,7 +528,7 @@ func (n *Native) buildTLS(spec NewInboundSpec) (*tlsConfig, error) {
 		return conf, nil
 	}
 
-	// 自签证书客户端验不过，分享链接里要带 allowInsecure
+	// 自签证书验不过 CA，靠链接里的证书指纹让客户端固定信任
 	c, k, err := selfSignedCert(n.dir, name)
 	if err != nil {
 		return nil, err
@@ -546,7 +549,7 @@ func (n *Native) buildReality(spec NewInboundSpec) (*realityConfig, error) {
 	if dest == "" {
 		// REALITY 要跟 dest 完成一次真实 TLS1.3 握手，dest 不稳会让所有连接
 		// 静默回落。microsoft.com 在部分机房握手经常走不完，这里选更可靠的。
-		dest = "www.cloudflare.com:443"
+		dest = "www.tesla.com:443"
 	}
 	if !strings.Contains(dest, ":") {
 		dest += ":443"

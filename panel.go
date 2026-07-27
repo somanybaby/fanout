@@ -98,7 +98,7 @@ func openPanel() (Panel, error) {
 
 	switch panelState.forced {
 	case "3x-ui":
-		x, err := DetectXUI()
+		x, err := DetectXUI(panelState.workDir)
 		if err != nil {
 			return nil, fmt.Errorf("指定了 3x-ui 模式但探测失败: %w", err)
 		}
@@ -113,7 +113,7 @@ func openPanel() (Panel, error) {
 		return n, nil
 	}
 
-	if x, err := DetectXUI(); err == nil {
+	if x, err := DetectXUI(panelState.workDir); err == nil {
 		panelState.current = x
 		return x, nil
 	} else if !xuiAbsent() {

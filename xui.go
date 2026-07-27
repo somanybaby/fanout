@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -44,12 +47,17 @@ const (
 	xuiMenu = "/usr/bin/x-ui"
 )
 
-// 每次调用 `x-ui setting -getApiToken` 面板都会新生成一个 token，
-// 所以进程内缓存复用，避免把面板的 token 列表撑爆。
+// 每次调用 `x-ui setting -getApiToken` 面板都会新生成一个 token 且不回收，
+// 重启多了会把面板的 api_tokens 表撑爆。所以：进程内缓存复用，
+// 跨重启则把 token 落盘（<workDir>/xui-token），下次先验证旧的还能不能用，
+// 能用就不再新建。
 var (
 	cachedToken   string
 	cachedTokenMu sync.Mutex
 )
+
+// xuiTokenFile 是 token 落盘的文件名，放在 fanout 工作目录下。
+const xuiTokenFile = "xui-token"
 
 var (
 	reXUIPort = regexp.MustCompile(`(?m)^port:\s*(\d+)`)
@@ -90,7 +98,8 @@ func stripANSI(s string) string {
 }
 
 // DetectXUI 探测本机 3x-ui。未安装或未运行时返回错误。
-func DetectXUI() (*XUI, error) {
+// workDir 用于落盘/复用 API token；传空则退回每次新建的旧行为。
+func DetectXUI(workDir string) (*XUI, error) {
 	if !xuiRunning() {
 		return nil, fmt.Errorf("本机未安装或未运行 3x-ui")
 	}
@@ -122,20 +131,35 @@ func DetectXUI() (*XUI, error) {
 	var port int
 	fmt.Sscanf(pm[1], "%d", &port)
 
-	cachedTokenMu.Lock()
-	defer cachedTokenMu.Unlock()
-	if cachedToken != "" {
+	newXUI := func(token string) *XUI {
 		return &XUI{
 			Host:     host,
 			Port:     port,
 			BasePath: strings.TrimSuffix(bm[1], "/"),
 			Scheme:   scheme,
-			token:    cachedToken,
+			token:    token,
 			client:   localClient(),
-		}, nil
+		}
 	}
 
-	// 没有 token 时这条命令会自动生成一个
+	cachedTokenMu.Lock()
+	defer cachedTokenMu.Unlock()
+	if cachedToken != "" {
+		return newXUI(cachedToken), nil
+	}
+
+	// 先试盘上存的 token：验证还能用就复用，避免每次启动都新建一个。
+	if workDir != "" {
+		if saved := readSavedToken(workDir); saved != "" {
+			x := newXUI(saved)
+			if x.tokenValid() {
+				cachedToken = saved
+				return x, nil
+			}
+		}
+	}
+
+	// 没有可用 token，这条命令会自动生成一个
 	tokOut, err := exec.Command(xuiBinary, "setting", "-getApiToken").Output()
 	if err != nil {
 		return nil, fmt.Errorf("获取 API token 失败: %w", err)
@@ -147,14 +171,33 @@ func DetectXUI() (*XUI, error) {
 	token := tm[1]
 
 	cachedToken = token
-	return &XUI{
-		Host:     host,
-		Port:     port,
-		BasePath: strings.TrimSuffix(bm[1], "/"),
-		Scheme:   scheme,
-		token:    token,
-		client:   localClient(),
-	}, nil
+	if workDir != "" {
+		saveToken(workDir, token)
+	}
+	return newXUI(token), nil
+}
+
+// tokenValid 用一次只读调用验证当前 token 还能用。
+func (x *XUI) tokenValid() bool {
+	_, err := x.get("panel/api/inbounds/list")
+	return err == nil
+}
+
+// readSavedToken 读回上次落盘的 token，没有就返回空串。
+func readSavedToken(workDir string) string {
+	blob, err := os.ReadFile(filepath.Join(workDir, xuiTokenFile))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(blob))
+}
+
+// saveToken 把 token 落盘（0600），失败只记日志不阻断。
+func saveToken(workDir, token string) {
+	path := filepath.Join(workDir, xuiTokenFile)
+	if err := os.WriteFile(path, []byte(token+"\n"), 0600); err != nil {
+		log.Printf("保存 API token 失败（不影响本次运行）: %v", err)
+	}
 }
 
 // localClient 用于访问本机面板。

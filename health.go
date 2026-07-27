@@ -37,7 +37,7 @@ func (m *Manager) WatchHealth() {
 
 			log.Printf("隧道 %d (%s) 已掉线，正在换节点重连", t.Slot, t.Node.HostName)
 			fails[t.Slot] = 0
-			m.reconnect(t)
+			m.reconnect(t, t.Node.HostName)
 		}
 	}
 }
@@ -64,8 +64,11 @@ func (m *Manager) tunnelHealthy(t *Tunnel) bool {
 
 // reconnect 就地把一条隧道换到别的节点上，保持槽位与端口不变，
 // 这样已经分发出去的客户端配置仍然可用。
-func (m *Manager) reconnect(t *Tunnel) {
-	oldHost := t.Node.HostName
+//
+// oldHost 必须是本次重连前那条隧道真正绑着的节点名。调用方若已经
+// 改过 t.Node（比如手动换节点），就要把改之前的名字传进来，
+// 否则 rebind 找不到旧绑定，入站会掉成孤儿。
+func (m *Manager) reconnect(t *Tunnel, oldHost string) {
 	t.Status = "starting"
 	t.Err = "正在换节点重连"
 	t.ExitIP = ""

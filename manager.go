@@ -17,6 +17,7 @@ type Manager struct {
 	fetched  time.Time
 	workDir  string
 	maxSlots int
+	jobs     JobStore
 }
 
 func NewManager(maxSlots int, workDir string) *Manager {
@@ -203,6 +204,7 @@ func (m *Manager) candidatesFor(first Node) []Node {
 
 // Stop 停掉一条隧道并释放槽位。
 func (m *Manager) Stop(slot int) error {
+	invalidateInbounds()
 	m.mu.Lock()
 	t, ok := m.tunnels[slot]
 	if ok {
@@ -216,6 +218,32 @@ func (m *Manager) Stop(slot int) error {
 	if err := m.saveState(); err != nil {
 		log.Printf("保存状态失败: %v", err)
 	}
+	return nil
+}
+
+// Swap 把一条隧道换到同地区的另一个节点上，端口与已分发的客户端配置保持不变。
+//
+// 与健康检查的自动重连不同：那边优先重连原节点（目标是恢复），
+// 这里用户是嫌当前出口 IP 不好用，必须真的换一个。
+func (m *Manager) Swap(slot int) error {
+	m.mu.RLock()
+	t, ok := m.tunnels[slot]
+	m.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("槽位 %d 没有运行中的隧道", slot)
+	}
+	if t.Status == "starting" {
+		return fmt.Errorf("这个出口正在连接中，稍等一下")
+	}
+
+	// pickNodes 已排除所有在用节点，拿到的必然不是当前这个
+	picks, err := m.pickNodes(t.Node.CountryCode, 1)
+	if err != nil {
+		return err
+	}
+	oldHost := t.Node.HostName
+	t.Node = picks[0]
+	m.reconnect(t, oldHost)
 	return nil
 }
 

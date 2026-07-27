@@ -30,514 +30,584 @@ header{display:flex;align-items:center;gap:16px;padding:10px 16px;
 h1{font-size:13px;font-weight:600;margin:0;letter-spacing:0}
 .spacer{flex:1}
 button{font:inherit;color:var(--text);background:#222833;border:1px solid var(--line);
-  border-radius:4px;padding:4px 10px;cursor:pointer}
-button:hover{border-color:var(--accent)}
+  border-radius:4px;padding:4px 10px;cursor:pointer;display:inline-flex;
+  align-items:center;gap:5px;white-space:nowrap}
+button:hover:not(:disabled){border-color:var(--accent)}
 button:disabled{opacity:.45;cursor:default}
 button.primary{background:var(--accent);border-color:var(--accent);color:#0b0e12;font-weight:600}
-.wrap{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);
-  height:calc(100vh - 41px)}
-section{background:var(--bg);display:flex;flex-direction:column;min-height:0}
-.head{display:flex;align-items:center;gap:10px;padding:8px 12px;
-  border-bottom:1px solid var(--line);background:var(--panel)}
-.head h2{font-size:12px;margin:0;font-weight:600}
-.count{color:var(--dim);font-size:11px}
-.scroll{overflow:auto;flex:1}
-table{width:100%;border-collapse:collapse}
-th{position:sticky;top:0;background:var(--panel);text-align:left;font-weight:600;
-  color:var(--dim);font-size:11px;padding:6px 10px;border-bottom:1px solid var(--line);
-  white-space:nowrap}
-td{padding:5px 10px;border-bottom:1px solid #1e232b;white-space:nowrap}
-tr:hover td{background:#1a1f27}
-.num{text-align:right;font-variant-numeric:tabular-nums}
-.dim{color:var(--dim)}
-.tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:11px}
-.s-up{background:rgba(63,166,107,.16);color:var(--ok)}
-.s-starting{background:rgba(201,144,58,.16);color:var(--warn)}
-.s-failed{background:rgba(194,84,80,.16);color:var(--bad)}
-.port{color:var(--accent);font-weight:600}
-.empty{padding:24px 12px;color:var(--dim);text-align:center}
-input[type=search]{font:inherit;background:#0e1116;border:1px solid var(--line);
-  color:var(--text);border-radius:4px;padding:4px 8px;width:150px}
-input[type=search]:focus{outline:none;border-color:var(--accent)}
-.err{color:var(--bad);font-size:11px;max-width:260px;overflow:hidden;
-  text-overflow:ellipsis;display:inline-block;vertical-align:bottom}
+button.icon{padding:3px 6px;background:transparent;border-color:transparent;color:var(--dim)}
+button.icon:hover:not(:disabled){color:var(--accent);border-color:var(--line)}
+svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.8;
+  stroke-linecap:round;stroke-linejoin:round;flex:none}
+main{padding:14px 16px 40px;max-width:1180px;margin:0 auto}
+.bar{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.bar h2{font-size:12px;margin:0;font-weight:600;color:var(--dim)}
+.exit{border:1px solid var(--line);border-radius:6px;margin-bottom:8px;
+  background:var(--panel);overflow:hidden}
+.exit>.row{display:grid;gap:6px 12px;align-items:center;padding:9px 12px;
+  grid-template-columns:14px minmax(132px,auto) 1fr auto auto auto;
+  grid-template-areas:"dot ip meta chips socks acts"}
+.exit .dot{grid-area:dot}
+.exit .ip{grid-area:ip}
+.exit .meta{grid-area:meta}
+.exit .chips{grid-area:chips}
+.exit .socks{grid-area:socks}
+.exit .acts{grid-area:acts}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--dim);justify-self:center}
+.dot.up{background:var(--ok)}
+.dot.starting{background:var(--warn);animation:pulse 1.2s ease-in-out infinite}
+.dot.failed{background:var(--bad)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.ip{font-weight:600;font-variant-numeric:tabular-nums}
+.meta{color:var(--dim);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{border:1px solid var(--line);border-radius:3px;padding:1px 7px;font-size:11px;
+  color:var(--dim);cursor:pointer;background:#0e1116}
+.chip:hover{border-color:var(--accent);color:var(--text)}
+.chip.none{border-style:dashed;cursor:default}
+.chip.none:hover{border-color:var(--line);color:var(--dim)}
+.orphan{margin-top:18px;border:1px solid var(--line);border-radius:6px;
+  background:var(--panel);padding:10px 12px}
+.orphan .top{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.orphan .top h3{font-size:12px;margin:0;font-weight:600;color:var(--dim)}
+.socks{color:var(--dim);font-size:12px;font-variant-numeric:tabular-nums}
+.acts{display:flex;gap:2px;justify-self:end}
+.errline{padding:0 12px 9px 38px;color:var(--bad);font-size:11px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.empty{border:1px dashed var(--line);border-radius:6px;padding:40px 20px;
+  text-align:center;color:var(--dim)}
+.empty button{margin-top:14px}
+.jobs{margin-bottom:12px}
+.job{border:1px solid var(--line);border-radius:6px;background:var(--panel);
+  padding:10px 12px;margin-bottom:8px}
+.job .top{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.job .top strong{font-weight:600;font-size:12px}
+.steps{display:flex;flex-wrap:wrap;gap:6px}
+.step{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--dim);
+  border:1px solid var(--line);border-radius:3px;padding:2px 7px;background:#0e1116}
+.step.ok{color:var(--ok);border-color:rgba(63,166,107,.35)}
+.step.failed{color:var(--bad);border-color:rgba(194,84,80,.35)}
+.step.running{color:var(--warn);border-color:rgba(201,144,58,.35)}
+.spin{animation:rot 1s linear infinite;transform-origin:center}
+@keyframes rot{to{transform:rotate(360deg)}}
 .links{display:flex;gap:14px;margin-right:4px}
 .links a{color:var(--dim);text-decoration:none;font-size:12px}
 .links a:hover{color:var(--accent)}
-@media(max-width:760px){.links{display:none}}
-@media(max-width:860px){.wrap{grid-template-columns:1fr;height:auto}}
-select{font:inherit;background:#0e1116;border:1px solid var(--line);color:var(--text);
-  border-radius:4px;padding:3px 6px;max-width:150px}
-select:focus{outline:none;border-color:var(--accent)}
+@media(max-width:820px){.links{display:none}
+  main{padding:12px 12px 40px}
+  .exit>.row{grid-template-columns:14px 1fr auto;
+    grid-template-areas:"dot ip acts" ". meta meta" ". socks socks" ". chips chips"}
+  .exit .chips{margin-top:2px}
+  .bar{flex-wrap:wrap}}
 .modal{position:fixed;inset:0;background:rgba(8,10,14,.72);display:none;
-  align-items:center;justify-content:center;z-index:50}
+  align-items:center;justify-content:center;z-index:50;padding:20px}
 .modal.open{display:flex}
 .sheet{background:var(--bg);border:1px solid var(--line);border-radius:6px;
-  width:min(760px,92vw);max-height:82vh;display:flex;flex-direction:column}
-.sheet .head{border-radius:6px 6px 0 0}
-.sheet .scroll{max-height:64vh}
-a.lnk{color:var(--text);text-decoration:none;border-bottom:1px dotted var(--dim)}
-a.lnk:hover{color:var(--accent);border-color:var(--accent)}
-.kv{display:grid;grid-template-columns:88px 1fr;gap:4px 12px;padding:12px 14px}
+  width:min(680px,100%);max-height:86vh;display:flex;flex-direction:column}
+.sheet .head{display:flex;align-items:center;gap:10px;padding:10px 14px;
+  border-bottom:1px solid var(--line);background:var(--panel);border-radius:6px 6px 0 0}
+.sheet .head h2{font-size:12px;margin:0;font-weight:600}
+.sheet .body{overflow:auto;padding:14px}
+.sheet .foot{display:flex;align-items:center;gap:10px;padding:10px 14px;
+  border-top:1px solid var(--line);background:var(--panel);border-radius:0 0 6px 6px}
+.count{color:var(--dim);font-size:11px}
+label.f{display:block;margin-bottom:16px}
+label.f>span{display:block;color:var(--dim);font-size:11px;margin-bottom:6px}
+.regions{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));
+  gap:6px;max-height:224px;overflow:auto}
+.rg{border:1px solid var(--line);background:#0e1116;border-radius:4px;padding:7px 9px;
+  cursor:pointer;text-align:left;display:block;width:100%}
+.rg:hover{border-color:var(--accent)}
+.rg.sel{border-color:var(--accent);background:rgba(74,158,218,.1)}
+.rg b{font-weight:600;font-size:12px;display:block;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.rg em{display:block;font-style:normal;color:var(--dim);font-size:11px;margin-top:2px}
+.stepper{display:flex;align-items:center;gap:0;width:fit-content;
+  border:1px solid var(--line);border-radius:4px;overflow:hidden;background:#0e1116}
+.stepper button{border:0;border-radius:0;background:transparent;padding:5px 11px}
+.stepper input{width:56px;text-align:center;font:inherit;background:transparent;
+  border:0;border-left:1px solid var(--line);border-right:1px solid var(--line);
+  color:var(--text);padding:5px 0;font-variant-numeric:tabular-nums}
+.stepper input:focus{outline:none}
+select,input[type=search]{font:inherit;background:#0e1116;border:1px solid var(--line);
+  color:var(--text);border-radius:4px;padding:5px 8px;width:100%}
+select:focus,input[type=search]:focus{outline:none;border-color:var(--accent)}
+.hint{color:var(--dim);font-size:11px;margin-top:6px}
+.hint.bad{color:var(--bad)}
+.kv{display:grid;grid-template-columns:76px 1fr;gap:5px 12px;margin:0 0 14px}
 .kv dt{color:var(--dim)}
 .kv dd{margin:0;word-break:break-all}
-.share{margin:0 14px 14px;padding:10px;background:#0e1116;border:1px solid var(--line);
-  border-radius:4px;word-break:break-all;font-size:12px;line-height:1.7}
+.share{padding:10px;background:#0e1116;border:1px solid var(--line);
+  border-radius:4px;word-break:break-all;font-size:12px;line-height:1.7;margin-bottom:8px}
 .share button{margin-top:8px}
-#exbox{width:100%;min-height:320px;background:#0e1116;border:0;color:var(--text);
+textarea{width:100%;min-height:300px;background:#0e1116;border:1px solid var(--line);
+  color:var(--text);border-radius:4px;
   font:12px/1.8 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  padding:12px 14px;resize:vertical}
-#exbox:focus{outline:none}
+  padding:10px 12px;resize:vertical}
+textarea:focus{outline:none;border-color:var(--accent)}
+.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);
+  background:var(--panel);border:1px solid var(--line);border-radius:4px;
+  padding:8px 14px;font-size:12px;z-index:80;opacity:0;pointer-events:none;
+  transition:opacity .18s}
+.toast.show{opacity:1}
+.toast.bad{border-color:rgba(194,84,80,.5);color:var(--bad)}
 </style>
 </head>
 <body>
 <header>
   <h1>fanout</h1>
-  <span class="count" id="xui">正在检测 3x-ui…</span>
+  <span class="count" id="panel"></span>
   <span class="spacer"></span>
   <nav class="links">
-    <a href="https://t.me/+ft-zI76oovgwNmRh" target="_blank" rel="noopener" title="交流群">交流群</a>
-    <a href="https://youtube.com/@joeyblog" target="_blank" rel="noopener" title="视频教程">油管</a>
-    <a href="https://joeyblog.net" target="_blank" rel="noopener" title="博客">博客</a>
-    <a href="https://github.com/byJoey/fanout" target="_blank" rel="noopener" title="源码与 issue">GitHub</a>
+    <a href="https://t.me/+ft-zI76oovgwNmRh" target="_blank" rel="noopener">交流群</a>
+    <a href="https://youtube.com/@joeyblog" target="_blank" rel="noopener">油管</a>
+    <a href="https://joeyblog.net" target="_blank" rel="noopener">博客</a>
+    <a href="https://github.com/byJoey/fanout" target="_blank" rel="noopener">GitHub</a>
   </nav>
-  <button id="refresh">重新拉取节点</button>
 </header>
 
-<div class="wrap">
-  <section>
-    <div class="head">
-      <h2>运行中</h2>
-      <span class="count" id="tcount"></span>
-      <span class="spacer"></span>
-      <button class="primary" id="addnode">添加节点</button>
-      <button id="stopall">全部停止</button>
-    </div>
-    <div class="scroll">
-      <table>
-        <thead><tr>
-          <th style="width:28px"><input type="checkbox" id="checkall" title="全选已连通"></th>
-          <th>端口</th><th>节点</th><th>地区</th><th>出口 IP</th><th>状态</th><th></th>
-        </tr></thead>
-        <tbody id="tbody"></tbody>
-      </table>
-      <div class="empty" id="tempty">还没有运行中的隧道，从右侧选一个节点启动</div>
-    </div>
-  </section>
+<main>
+  <div class="jobs" id="jobs"></div>
 
-  <section>
-    <div class="head">
-      <h2>3x-ui 入站</h2>
-      <span class="count" id="icount"></span>
-      <span class="spacer"></span>
-      <button id="exportBtn" title="导出勾选入站的分享链接">导出链接</button>
-      <button id="cloneBtn" title="以选中的入站为模板，为每个勾选的出口各复制一个">按出口复制…</button>
-      <button id="reloadin">刷新</button>
-    </div>
-    <div class="scroll">
-      <table>
-        <thead><tr>
-          <th style="width:26px"><input type="checkbox" id="icheckall" title="全选"></th>
-          <th style="width:26px" title="复制模板">模板</th><th>备注</th><th>端口</th><th>出口走</th>
-        </tr></thead>
-        <tbody id="ibody"></tbody>
-      </table>
-      <div class="empty" id="iempty">面板里还没有入站，先去 3x-ui 建一个</div>
-    </div>
-  </section>
-</div>
+  <div class="bar">
+    <h2>出口</h2>
+    <span class="count" id="ecount"></span>
+    <span class="spacer"></span>
+    <button id="exportAll" title="导出全部节点链接">
+      <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+      导出链接
+    </button>
+    <button id="stopall" title="停止所有出口">
+      <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+      全部停止
+    </button>
+    <button class="primary" id="newexit">
+      <svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+      新建出口
+    </button>
+  </div>
 
-<div class="modal" id="nodemodal">
+  <div id="list"></div>
+
+  <div id="orphans"></div>
+</main>
+
+<div class="modal" id="wizard">
   <div class="sheet">
     <div class="head">
-      <h2>选择节点启动</h2>
-      <span class="count" id="ncount"></span>
+      <h2>新建出口</h2>
       <span class="spacer"></span>
-      <input type="search" id="filter" placeholder="按地区/主机名筛选">
-      <button id="closemodal">关闭</button>
+      <button class="icon" data-close="wizard" title="关闭">
+        <svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
     </div>
-    <div class="scroll">
-      <table>
-        <thead><tr>
-          <th>主机名</th><th>地区</th><th class="num">延迟</th>
-          <th class="num">带宽</th><th class="num">会话</th><th></th>
-        </tr></thead>
-        <tbody id="nbody"></tbody>
-      </table>
+    <div class="body">
+      <label class="f">
+        <span>地区</span>
+        <input type="search" id="rgfilter" placeholder="筛选地区">
+        <div class="regions" id="regions" style="margin-top:6px"></div>
+      </label>
+      <label class="f">
+        <span>数量</span>
+        <div class="stepper">
+          <button id="minus" title="减少">
+            <svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg>
+          </button>
+          <input id="count" type="text" inputmode="numeric" value="3">
+          <button id="plus" title="增加">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+          </button>
+        </div>
+        <div class="hint" id="availhint"></div>
+      </label>
+      <label class="f" id="tplwrap">
+        <span>节点链接</span>
+        <select id="tpl"></select>
+        <div class="hint" id="tplhint"></div>
+      </label>
+    </div>
+    <div class="foot">
+      <span class="count" id="wzhint"></span>
+      <span class="spacer"></span>
+      <button data-close="wizard">取消</button>
+      <button class="primary" id="go">开始</button>
     </div>
   </div>
 </div>
 
-<div class="modal" id="exportmodal">
+<div class="modal" id="detail">
   <div class="sheet">
     <div class="head">
-      <h2>导出链接</h2>
+      <h2 id="dtitle">节点</h2>
+      <span class="spacer"></span>
+      <button class="icon" data-close="detail" title="关闭">
+        <svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+    <div class="body" id="dbody"></div>
+  </div>
+</div>
+
+<div class="modal" id="export">
+  <div class="sheet">
+    <div class="head">
+      <h2>节点链接</h2>
       <span class="count" id="excount"></span>
       <span class="spacer"></span>
-      <button id="copyall">全部复制</button>
-      <button id="closeexport">关闭</button>
+      <button id="copyall">
+        <svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        全部复制
+      </button>
+      <button class="icon" data-close="export" title="关闭">
+        <svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
     </div>
-    <div class="scroll"><textarea id="exbox" spellcheck="false"></textarea></div>
+    <div class="body"><textarea id="exbox" spellcheck="false" readonly></textarea></div>
   </div>
 </div>
 
-<div class="modal" id="detailmodal">
-  <div class="sheet">
-    <div class="head">
-      <h2 id="dtitle">入站详情</h2>
-      <span class="spacer"></span>
-      <button id="closedetail">关闭</button>
-    </div>
-    <div class="scroll" id="dbody"></div>
-  </div>
-</div>
+<div class="toast" id="toast"></div>
 
 <script>
 const $ = s => document.querySelector(s);
-let nodes = [], tunnels = [];
-const picked = new Set();
-let tplId = 0;
-const ipicked = new Set();
+const ICON = {
+  copy:'<svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+  stop:'<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>',
+  redo:'<svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>',
+  ok:'<svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>',
+  bad:'<svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
+  run:'<svg viewBox="0 0 24 24" class="spin"><path d="M21 12a9 9 0 1 1-6.2-8.5"/></svg>',
+  wait:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg>',
+  trash:'<svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+  x:'<svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>'
+};
 
-// 界面挂在随机前缀下，请求一律走相对路径，去掉开头的斜杠即可
+// 界面挂在随机前缀下，请求一律走相对路径
 async function api(path, opts){
   const r = await fetch(path.replace(/^\//, ''), opts);
   const d = await r.json().catch(()=>({}));
   if(!r.ok) throw new Error(d.error || ('HTTP '+r.status));
   return d;
 }
-
-function statusTag(s){
-  const label = {up:'已连通', starting:'连接中', failed:'失败', stopped:'已停止'}[s] || s;
-  return '<span class="tag s-'+s+'">'+label+'</span>';
-}
-
-function renderTunnels(){
-  const tb = $('#tbody');
-  // 隧道停掉后把它的勾选也去掉，避免复制到已经不存在的出口
-  const alive = new Set(tunnels.filter(t => t.status === 'up').map(t => t.slot));
-  for(const s of [...picked]) if(!alive.has(s)) picked.delete(s);
-  $('#tempty').style.display = tunnels.length ? 'none' : '';
-  updatePickCount();
-  tb.innerHTML = tunnels.map(t => {
-    const detail = t.status === 'failed' && t.err
-      ? '<span class="err" title="'+esc(t.err)+'">'+esc(t.err)+'</span>' : '';
-    const sel = t.status === 'up'
-      ? '<input type="checkbox" class="pick" value="'+t.slot+'"'+(picked.has(t.slot)?' checked':'')+'>'
-      : '';
-    return '<tr>'
-      + '<td>'+sel+'</td>'
-      + '<td class="port">'+t.port+'</td>'
-      + '<td>'+esc(t.node.hostname)+'</td>'
-      + '<td class="dim">'+esc(t.node.country_code)+'</td>'
-      + '<td>'+(t.exit_ip || '<span class="dim">—</span>')+'</td>'
-      + '<td>'+statusTag(t.status)+' '+detail+'</td>'
-      + '<td><button data-stop="'+t.slot+'">停止</button></td>'
-      + '</tr>';
-  }).join('');
-}
-
-function renderNodes(){
-  const kw = $('#filter').value.trim().toLowerCase();
-  const running = new Set(tunnels.map(t => t.node.hostname));
-  const list = nodes.filter(n => !kw
-    || n.hostname.toLowerCase().includes(kw)
-    || n.country.toLowerCase().includes(kw)
-    || n.country_code.toLowerCase().includes(kw));
-  $('#ncount').textContent = list.length + ' 个';
-  $('#nbody').innerHTML = list.slice(0,150).map(n => {
-    const busy = running.has(n.hostname);
-    return '<tr>'
-      + '<td>'+esc(n.hostname)+'</td>'
-      + '<td class="dim">'+esc(n.country_code)+' '+esc(n.country)+'</td>'
-      + '<td class="num">'+n.ping+' ms</td>'
-      + '<td class="num">'+n.speed_mbps.toFixed(0)+' Mbps</td>'
-      + '<td class="num dim">'+n.sessions+'</td>'
-      + '<td><button data-start="'+esc(n.hostname)+'"'+(busy?' disabled':'')+'>'
-      + (busy?'已启动':'启动')+'</button></td>'
-      + '</tr>';
-  }).join('');
-}
-
-function esc(s){ return String(s).replace(/[&<>"']/g, c =>
+function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+let toastTimer;
+function toast(msg, bad){
+  const el = $('#toast');
+  el.textContent = msg;
+  el.className = 'toast show' + (bad ? ' bad' : '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.className = 'toast'; }, 2400);
+}
+async function copy(text){
+  try{ await navigator.clipboard.writeText(text); toast('已复制'); }
+  catch(e){ toast('复制失败，请手动选中', true); }
+}
+
+let view = {exits:[], direct:[], panel:''};
+let inbounds = [];
+
+const STATUS = {up:'已连通', starting:'连接中', failed:'失败', stopped:'已停止'};
+
+function renderExits(){
+  const list = $('#list');
+  const n = view.exits.length;
+  $('#ecount').textContent = n ? n + ' 个' : '';
+  $('#exportAll').disabled = !view.exits.some(e => e.inbounds && e.inbounds.length);
+  $('#stopall').disabled = !n;
+
+  if(!n){
+    list.innerHTML = '<div class="empty">还没有出口'
+      + '<div><button class="primary" id="newexit2">'
+      + '<svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>'
+      + '新建出口</button></div></div>';
+    return;
+  }
+
+  list.innerHTML = view.exits.map(e => {
+    const label = e.exit_ip || (e.status === 'starting' ? '连接中…' : '—');
+    const chips = (e.inbounds || []).length
+      ? e.inbounds.map(i => '<button class="chip" data-detail="' + i.id + '" title="'
+          + esc((i.remark || i.protocol) + ' · ' + i.protocol + ' :' + i.port) + '">'
+          + esc(i.protocol) + ' :' + i.port + '</button>').join('')
+      : '<span class="chip none">无节点</span>';
+    const err = e.status === 'failed' && e.err
+      ? '<div class="errline" title="' + esc(e.err) + '">' + esc(e.err) + '</div>' : '';
+    // 国家码和全名一起显示是冗余的，只在两者确实不同时才补全名
+    const place = e.country && e.country.toUpperCase() !== (e.region || '').toUpperCase()
+      ? esc(e.region) + ' ' + esc(e.country) : esc(e.region || '—');
+    return '<div class="exit">'
+      + '<div class="row">'
+      +   '<span class="dot ' + e.status + '" title="' + (STATUS[e.status] || e.status) + '"></span>'
+      +   '<span class="ip">' + esc(label) + '</span>'
+      +   '<span class="meta">' + place + ' · ' + esc(e.host) + '</span>'
+      +   '<span class="chips">' + chips + '</span>'
+      +   '<span class="socks">SOCKS5 :' + e.port + '</span>'
+      +   '<span class="acts">'
+      +     '<button class="icon" data-swap="' + e.slot + '" title="换一个节点">' + ICON.redo + '</button>'
+      +     '<button class="icon" data-stop="' + e.slot + '" title="停止这个出口">' + ICON.stop + '</button>'
+      +   '</span>'
+      + '</div>' + err + '</div>';
+  }).join('');
+}
+
+// 停掉出口后它的入站会留在面板里。这些入站现在走直连，
+// 用户既看不出它们和 fanout 的关系，也没有清理入口，所以单独列出来。
+function renderOrphans(){
+  const box = $('#orphans');
+  const list = view.direct || [];
+  if(!list.length){ box.innerHTML = ''; return; }
+  box.innerHTML = '<div class="orphan"><div class="top">'
+    + '<h3>未绑定出口的入站</h3><span class="count">' + list.length + ' 个，走直连</span>'
+    + '<span class="spacer"></span>'
+    + '<button data-delorphans="1" title="从 3x-ui 删除这些入站">'
+    + ICON.trash + '清理</button></div>'
+    + '<div class="chips">' + list.map(i =>
+        '<button class="chip" data-detail="' + i.id + '" title="'
+        + esc((i.remark || i.protocol) + ' · ' + i.protocol + ' :' + i.port) + '">'
+        + esc(i.remark || i.protocol) + ' :' + i.port + '</button>').join('')
+    + '</div></div>';
+}
+
+function renderJobs(jobs){
+  const box = $('#jobs');
+  box.innerHTML = jobs.map(j => {
+    const steps = j.steps.map(s => {
+      const ic = {ok:ICON.ok, failed:ICON.bad, running:ICON.run}[s.status] || ICON.wait;
+      const t = s.detail ? s.label + ' — ' + s.detail : s.label;
+      return '<span class="step ' + s.status + '" title="' + esc(t) + '">' + ic
+        + esc(s.status === 'ok' && s.detail ? s.detail : s.label) + '</span>';
+    }).join('');
+    const close = j.status === 'running' ? ''
+      : '<button class="icon" data-job="' + esc(j.id) + '" title="关闭">' + ICON.x + '</button>';
+    return '<div class="job"><div class="top"><strong>' + esc(j.summary) + '</strong>'
+      + '<span class="count">' + j.done + '/' + j.total + '</span>'
+      + '<span class="spacer"></span>' + close + '</div>'
+      + '<div class="steps">' + steps + '</div></div>';
+  }).join('');
+}
 
 async function poll(){
   try{
-    tunnels = await api('/api/tunnels') || [];
-    renderTunnels(); renderNodes();
-    if(inbounds.length) renderInbounds();
+    view = await api('/api/exits');
+    $('#panel').textContent = view.panel ? '3x-ui: ' + view.panel : '';
+    renderExits();
+    renderOrphans();
   }catch(e){}
+  try{ renderJobs(await api('/api/jobs') || []); }catch(e){}
 }
 
-async function loadNodes(){
-  const d = await api('/api/nodes');
-  nodes = d.nodes || [];
-  renderNodes();
+// ---- 新建向导 ----
+let regions = [], region = '', regionsLoaded = false;
+
+function openModal(id){ $('#' + id).classList.add('open'); }
+function closeModal(id){ $('#' + id).classList.remove('open'); }
+
+document.addEventListener('click', e => {
+  const c = e.target.closest('[data-close]');
+  if(c) closeModal(c.dataset.close);
+});
+document.addEventListener('keydown', e => {
+  if(e.key === 'Escape') document.querySelectorAll('.modal.open')
+    .forEach(m => m.classList.remove('open'));
+});
+document.querySelectorAll('.modal').forEach(m => {
+  m.onclick = e => { if(e.target === m) m.classList.remove('open'); };
+});
+
+function renderRegions(){
+  const kw = $('#rgfilter').value.trim().toLowerCase();
+  const list = regions.filter(r => !kw
+    || r.code.toLowerCase().includes(kw) || r.name.toLowerCase().includes(kw));
+  $('#regions').innerHTML = ['<button class="rg' + (region === '' ? ' sel' : '')
+      + '" data-rg=""><b>不限地区</b><em>速度优先</em></button>']
+    .concat(list.map(r => '<button class="rg' + (region === r.code ? ' sel' : '')
+      + '" data-rg="' + esc(r.code) + '"><b>' + esc(r.code) + ' ' + esc(r.name) + '</b>'
+      + '<em>' + r.available + ' 个空闲 · ' + r.best_speed_mbps.toFixed(0) + ' Mbps</em></button>'))
+    .join('');
+  updateAvail();
 }
 
-document.addEventListener('click', async e => {
-  const start = e.target.dataset.start, stop = e.target.dataset.stop;
-  if(start){
-    e.target.disabled = true; e.target.textContent = '启动中';
-    try{ await api('/api/start?host='+encodeURIComponent(start), {method:'POST'}); }
-    catch(err){ alert('启动失败: '+err.message); }
-    poll();
+function availOf(code){
+  if(code === '') return regions.reduce((a, r) => a + r.available, 0);
+  const r = regions.find(x => x.code === code);
+  return r ? r.available : 0;
+}
+
+function updateAvail(){
+  const avail = availOf(region);
+  const want = Number($('#count').value) || 0;
+  const hint = $('#availhint');
+  hint.textContent = avail ? '可用 ' + avail + ' 个节点' : '这个地区没有空闲节点';
+  hint.className = 'hint' + (want > avail ? ' bad' : '');
+  if(want > avail && avail) hint.textContent = '只剩 ' + avail + ' 个，将全部使用';
+  $('#go').disabled = !avail;
+}
+
+async function loadWizard(){
+  try{
+    regions = await api('/api/regions') || [];
+    regionsLoaded = true;
+    renderRegions();
+  }catch(e){ toast('读取地区失败: ' + e.message, true); }
+
+  const sel = $('#tpl');
+  try{
+    // 已经挂在出口上的多半是上一批复制出来的，拿它当模板会套娃，
+    // 所以把没绑出口的排在前面并默认选中
+    const v = await api('/api/exits');
+    const free = v.direct || [];
+    const bound = (v.exits || []).flatMap(e => e.inbounds || []);
+    inbounds = free.concat(bound);
+    if(!inbounds.length){
+      sel.innerHTML = '<option value="0">面板里还没有入站</option>';
+      $('#tplhint').textContent = '先在 3x-ui 建一个入站，之后这里可以按它批量生成';
+      return;
+    }
+    const opt = i => '<option value="' + i.id + '">'
+      + esc(i.remark || ('端口 ' + i.port)) + ' · ' + esc(i.protocol)
+      + ' :' + i.port + '</option>';
+    sel.innerHTML =
+      (free.length ? '<optgroup label="未绑定出口">' + free.map(opt).join('') + '</optgroup>' : '')
+      + (bound.length ? '<optgroup label="已挂在出口上">' + bound.map(opt).join('') + '</optgroup>' : '')
+      + '<option value="0">只开出口，不建节点</option>';
+    $('#tplhint').textContent = '每个出口复制一份，客户端 UUID 保持一致，只有端口不同';
+  }catch(e){
+    sel.innerHTML = '<option value="0">面板不可用</option>';
+    $('#tplhint').textContent = e.message;
   }
+}
+
+document.addEventListener('click', e => {
+  if(e.target.closest('#newexit') || e.target.closest('#newexit2')){
+    openModal('wizard');
+    if(!regionsLoaded) loadWizard(); else { renderRegions(); loadWizard(); }
+  }
+  const rg = e.target.closest('[data-rg]');
+  if(rg){ region = rg.dataset.rg; renderRegions(); }
+});
+
+$('#rgfilter').oninput = renderRegions;
+$('#minus').onclick = () => { step(-1); };
+$('#plus').onclick = () => { step(1); };
+function step(d){
+  const el = $('#count');
+  el.value = Math.min(20, Math.max(1, (Number(el.value) || 1) + d));
+  updateAvail();
+}
+$('#count').oninput = updateAvail;
+
+$('#go').onclick = async e => {
+  const want = Math.min(Number($('#count').value) || 1, availOf(region) || 1);
+  const tpl = $('#tpl').value || '0';
+  e.target.disabled = true;
+  try{
+    await api('/api/provision?count=' + want + '&region=' + encodeURIComponent(region)
+      + '&template=' + tpl, {method:'POST'});
+    closeModal('wizard');
+    poll();
+  }catch(err){ toast(err.message, true); }
+  e.target.disabled = false;
+};
+
+// ---- 出口操作 ----
+document.addEventListener('click', async e => {
+  const stop = e.target.closest('[data-stop]');
   if(stop){
-    e.target.disabled = true;
-    try{ await api('/api/stop?slot='+stop, {method:'POST'}); }
-    catch(err){ alert('停止失败: '+err.message); }
+    stop.disabled = true;
+    try{ await api('/api/stop?slot=' + stop.dataset.stop, {method:'POST'}); }
+    catch(err){ toast(err.message, true); }
+    poll();
+    return;
+  }
+  const swap = e.target.closest('[data-swap]');
+  if(swap){
+    swap.disabled = true;
+    try{
+      await api('/api/swap?slot=' + swap.dataset.swap, {method:'POST'});
+      toast('正在换节点');
+    }catch(err){ toast(err.message, true); }
+    poll();
+    return;
+  }
+  const job = e.target.closest('[data-job]');
+  if(job){
+    try{ await api('/api/jobs/dismiss?id=' + job.dataset.job, {method:'POST'}); }catch(err){}
+    poll();
+    return;
+  }
+  const del = e.target.closest('[data-delorphans]');
+  if(del){
+    const list = view.direct || [];
+    if(!confirm('从 3x-ui 删除这 ' + list.length + ' 个未绑定入站？此操作不可撤销。')) return;
+    del.disabled = true;
+    try{
+      await api('/api/xui/delete?ids=' + list.map(i => i.id).join(','), {method:'POST'});
+      toast('已清理 ' + list.length + ' 个入站');
+    }catch(err){ toast(err.message, true); }
     poll();
   }
 });
 
-$('#refresh').onclick = async e => {
-  e.target.disabled = true; e.target.textContent = '拉取中';
-  try{ await api('/api/refresh', {method:'POST'}); await loadNodes(); }
-  catch(err){ alert('拉取失败: '+err.message); }
-  e.target.disabled = false; e.target.textContent = '重新拉取节点';
-};
-
-$('#stopall').onclick = async () => {
-  for(const t of tunnels){
-    try{ await api('/api/stop?slot='+t.slot, {method:'POST'}); }catch(e){}
+$('#stopall').onclick = async e => {
+  if(!confirm('停止全部 ' + view.exits.length + ' 个出口？')) return;
+  e.target.disabled = true;
+  for(const x of view.exits){
+    try{ await api('/api/stop?slot=' + x.slot, {method:'POST'}); }catch(err){}
   }
   poll();
 };
 
-$('#filter').oninput = renderNodes;
-
-let inbounds = [];
-
-async function checkXui(){
-  try{
-    const d = await api('/api/xui');
-    if(d.available){
-      $('#xui').textContent = '3x-ui 面板 ' + (d.scheme || 'http') + ' :' + d.port;
-      loadInbounds();
-    }else{
-      $('#xui').textContent = '3x-ui: ' + d.reason;
-      $('#iempty').textContent = d.reason;
-    }
-  }catch(e){}
-}
-
-async function loadInbounds(){
-  try{
-    inbounds = await api('/api/xui/inbounds') || [];
-    renderInbounds();
-  }catch(e){
-    $('#iempty').textContent = '读取入站失败: ' + e.message;
-  }
-}
-
-function updateInboundCount(){
-  const n = ipicked.size;
-  $('#icount').textContent = inbounds.length
-    ? inbounds.length + ' 个' + (n ? '，已选 ' + n : '')
-    : '';
-}
-
-function renderInbounds(){
-  // 入站被删掉后同步清理勾选
-  const alive = new Set(inbounds.map(i => i.id));
-  for(const id of [...ipicked]) if(!alive.has(id)) ipicked.delete(id);
-  updateInboundCount();
-  $('#iempty').style.display = inbounds.length ? 'none' : '';
-  const box = $('#icheckall');
-  if(box) box.checked = inbounds.length > 0 && ipicked.size === inbounds.length;
-  const up = tunnels.filter(t => t.status === 'up');
-  $('#ibody').innerHTML = inbounds.map(i => {
-    const opts = ['<option value="">直连（不走隧道）</option>'].concat(
-      up.map(t => '<option value="'+esc(t.node.hostname)+'"'
-        + (i.bound_to === t.node.hostname ? ' selected' : '') + '>'
-        + (t.exit_ip || t.node.hostname) + ' · ' + t.port + '</option>')
-    );
-    // 绑定的节点当前没在跑时照实显示，不要悄悄改掉用户的选择
-    if(i.bound_to && !i.bound_up){
-      opts.push('<option value="'+esc(i.bound_to)+'" selected>'
-        + esc(i.bound_to) + '（未运行）</option>');
-    }
-    return '<tr>'
-      + '<td><input type="checkbox" class="ipick" value="'+i.id+'"'
-      +   (ipicked.has(i.id)?' checked':'')+'></td>'
-      + '<td><input type="radio" name="tpl" class="tpl" value="'+i.id+'"'
-      +   (tplId===i.id?' checked':'')+' title="选作复制模板"></td>'
-      + '<td><a href="#" class="lnk" data-detail="'+i.id+'">'
-      +   esc(i.remark || '(无备注)')+'</a>'+(i.enable?'':' <span class="dim">停用</span>')
-      +   ' <span class="dim">'+esc(i.protocol)+'</span></td>'
-      + '<td class="num">'+i.port+'</td>'
-      + '<td><select data-tag="'+esc(i.tag)+'">'+opts.join('')+'</select></td>'
-      + '</tr>';
-  }).join('');
-}
-
-$('#cloneBtn').onclick = async e => {
-  if(!tplId){ alert('先在下面选一个入站作为模板'); return; }
-  const up = tunnels.filter(t => t.status === 'up' && picked.has(t.slot));
-  if(!up.length){ alert('先在左边勾选要用的出口'); return; }
-  const tpl = inbounds.find(i => i.id === tplId);
-  const names = up.map(t => '  · ' + (t.exit_ip || ('槽位'+t.slot))).join('\n');
-  if(!confirm('以「' + (tpl ? tpl.remark : tplId) + '」为模板复制 ' + up.length + ' 个入站：\n\n' + names)) return;
-  e.target.disabled = true; e.target.textContent = '复制中';
-  try{
-    const hosts = up.map(t => encodeURIComponent(t.node.hostname)).join(',');
-    const d = await api('/api/xui/clone?id='+tplId+'&hosts='+hosts, {method:'POST'});
-    alert('已创建入站端口: ' + d.created.join(', '));
-    await loadInbounds();
-  }catch(err){ alert('复制失败: ' + err.message); }
-  e.target.disabled = false; e.target.textContent = '按出口复制…';
-};
-
-document.addEventListener('change', async e => {
-  const tag = e.target.dataset.tag;
-  if(!tag) return;
-  e.target.disabled = true;
-  try{
-    await api('/api/xui/bind?tag='+encodeURIComponent(tag)
-      +'&host='+encodeURIComponent(e.target.value), {method:'POST'});
-    await loadInbounds();
-  }catch(err){
-    alert('绑定失败: ' + err.message);
-    await loadInbounds();
-  }
-  e.target.disabled = false;
-});
-
-$('#reloadin').onclick = loadInbounds;
-
-const xmodal = $('#exportmodal');
-$('#closeexport').onclick = () => xmodal.classList.remove('open');
-xmodal.onclick = e => { if(e.target === xmodal) xmodal.classList.remove('open'); };
-
-$('#exportBtn').onclick = async e => {
-  const ids = ipicked.size ? [...ipicked] : inbounds.map(i => i.id);
-  if(!ids.length){ alert('没有可导出的入站'); return; }
-  $('#exbox').value = '读取中…';
-  $('#excount').textContent = '';
-  xmodal.classList.add('open');
-  try{
-    const d = await api('/api/xui/links?ids=' + ids.join(','));
-    const links = d.links || [];
-    $('#exbox').value = links.join('\n');
-    $('#excount').textContent = links.length + ' 条';
-  }catch(err){
-    $('#exbox').value = '导出失败: ' + err.message;
-  }
-};
-
-$('#copyall').onclick = async e => {
-  const v = $('#exbox').value;
-  if(!v) return;
-  try{
-    await navigator.clipboard.writeText(v);
-    e.target.textContent = '已复制';
-    setTimeout(() => { e.target.textContent = '全部复制'; }, 1200);
-  }catch(err){
-    $('#exbox').select();
-    alert('自动复制失败，已选中，请按 Cmd/Ctrl+C');
-  }
-};
-
-const dmodal = $('#detailmodal');
-$('#closedetail').onclick = () => dmodal.classList.remove('open');
-dmodal.onclick = e => { if(e.target === dmodal) dmodal.classList.remove('open'); };
-
+// ---- 节点详情 ----
 document.addEventListener('click', async e => {
   const link = e.target.closest('[data-detail]');
   if(!link) return;
-  e.preventDefault();
   $('#dbody').innerHTML = '<div class="empty">读取中…</div>';
-  dmodal.classList.add('open');
+  openModal('detail');
   try{
     const d = await api('/api/xui/detail?id=' + link.dataset.detail);
-    const t = tunnels.find(x => x.node.hostname === d.bound_to);
-    const exit = t ? (t.exit_ip + '（' + t.node.hostname + '）')
-      : (d.bound_to ? d.bound_to + '（未运行）' : '直连（未绑定隧道）');
-    const clients = d.clients.length
-      ? d.clients.map(c => c.email + '　' + c.id).join('<br>')
-      : '<span class="dim">无</span>';
+    const owner = view.exits.find(x => (x.inbounds || []).some(i => i.id === d.id));
+    const exit = owner ? (owner.exit_ip || owner.host) + '（' + esc(owner.region) + '）' : '直连';
     const links = (d.links || []).length
       ? d.links.map(l => '<div class="share">' + esc(l)
-          + '<br><button data-copy="' + esc(l) + '">复制链接</button></div>').join('')
-      : '<div class="share dim">面板未生成分享链接</div>';
-    $('#dtitle').textContent = (d.remark || '入站') + '　:' + d.port;
+          + '<div><button data-copy="' + esc(l) + '">' + ICON.copy + '复制</button></div></div>').join('')
+      : '<div class="share">面板未生成分享链接</div>';
+    $('#dtitle').textContent = (d.remark || '节点') + '　:' + d.port;
     $('#dbody').innerHTML = '<dl class="kv">'
-      + '<dt>出口</dt><dd>' + esc(exit) + '</dd>'
+      + '<dt>出口</dt><dd>' + exit + '</dd>'
       + '<dt>协议</dt><dd>' + esc(d.protocol) + '　' + esc(d.network || '')
       +   (d.tls && d.tls !== 'none' ? '　' + esc(d.tls) : '') + '</dd>'
       + '<dt>监听</dt><dd>' + esc(d.listen || '0.0.0.0') + ':' + d.port + '</dd>'
-      + '<dt>Xray tag</dt><dd>' + esc(d.tag) + '</dd>'
-      + '<dt>客户端</dt><dd>' + clients + '</dd>'
+      + '<dt>客户端</dt><dd>' + (d.clients || []).map(c => esc(c.email) + '　' + esc(c.id))
+          .join('<br>') + '</dd>'
       + '</dl>' + links;
   }catch(err){
     $('#dbody').innerHTML = '<div class="empty">读取失败: ' + esc(err.message) + '</div>';
   }
 });
 
-document.addEventListener('click', async e => {
-  const val = e.target.dataset.copy;
-  if(!val) return;
+document.addEventListener('click', e => {
+  const c = e.target.closest('[data-copy]');
+  if(c) copy(c.dataset.copy);
+});
+
+// ---- 导出 ----
+$('#exportAll').onclick = async () => {
+  const ids = view.exits.flatMap(x => (x.inbounds || []).map(i => i.id));
+  if(!ids.length){ toast('还没有节点可导出', true); return; }
+  $('#exbox').value = '读取中…';
+  $('#excount').textContent = '';
+  openModal('export');
   try{
-    await navigator.clipboard.writeText(val);
-    const old = e.target.textContent;
-    e.target.textContent = '已复制';
-    setTimeout(() => { e.target.textContent = old; }, 1200);
-  }catch(err){ alert('复制失败，请手动选中'); }
-});
+    const d = await api('/api/xui/links?ids=' + ids.join(','));
+    $('#exbox').value = (d.links || []).join('\n');
+    $('#excount').textContent = (d.links || []).length + ' 条';
+  }catch(err){ $('#exbox').value = '导出失败: ' + err.message; }
+};
+$('#copyall').onclick = () => { const v = $('#exbox').value; if(v) copy(v); };
 
-const modal = $('#nodemodal');
-$('#addnode').onclick = () => { modal.classList.add('open'); $('#filter').focus(); };
-$('#closemodal').onclick = () => modal.classList.remove('open');
-modal.onclick = e => { if(e.target === modal) modal.classList.remove('open'); };
-document.addEventListener('keydown', e => {
-  if(e.key === 'Escape'){
-    modal.classList.remove('open');
-    dmodal.classList.remove('open');
-    xmodal.classList.remove('open');
-  }
-});
-
-// 勾选出口：单个 + 全选
-document.addEventListener('change', e => {
-  if(e.target.classList.contains('pick')){
-    const slot = Number(e.target.value);
-    e.target.checked ? picked.add(slot) : picked.delete(slot);
-    updatePickCount();
-  }
-  if(e.target.classList.contains('ipick')){
-    const id = Number(e.target.value);
-    e.target.checked ? ipicked.add(id) : ipicked.delete(id);
-    updateInboundCount();
-  }
-  if(e.target.id === 'icheckall'){
-    ipicked.clear();
-    if(e.target.checked) inbounds.forEach(i => ipicked.add(i.id));
-    renderInbounds();
-  }
-  if(e.target.classList.contains('tpl')){
-    tplId = Number(e.target.value);
-  }
-  if(e.target.id === 'checkall'){
-    picked.clear();
-    if(e.target.checked){
-      tunnels.filter(t => t.status === 'up').forEach(t => picked.add(t.slot));
-    }
-    renderTunnels(); updatePickCount();
-  }
-});
-
-function updatePickCount(){
-  const n = picked.size;
-  $('#tcount').textContent = tunnels.length
-    ? tunnels.length + ' 条' + (n ? '，已勾选 ' + n : '')
-    : '';
-}
-
-loadNodes().catch(()=>{});
 poll();
-checkXui();
 setInterval(poll, 3000);
 </script>
 </body>

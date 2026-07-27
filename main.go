@@ -72,13 +72,20 @@ func main() {
 	mux.HandleFunc("/api/tunnels", apiTunnels(mgr))
 	mux.HandleFunc("/api/start", apiStart(mgr))
 	mux.HandleFunc("/api/stop", apiStop(mgr))
+	mux.HandleFunc("/api/swap", apiSwap(mgr))
 	mux.HandleFunc("/api/refresh", apiRefresh(mgr))
+	mux.HandleFunc("/api/regions", apiRegions(mgr))
+	mux.HandleFunc("/api/provision", apiProvision(mgr))
+	mux.HandleFunc("/api/jobs", apiJobs(mgr))
+	mux.HandleFunc("/api/jobs/dismiss", apiJobDismiss(mgr))
+	mux.HandleFunc("/api/exits", apiExits(mgr))
 	mux.HandleFunc("/api/xui", apiXUIStatus)
 	mux.HandleFunc("/api/xui/inbounds", apiXUIInbounds(mgr))
 	mux.HandleFunc("/api/xui/bind", apiXUIBind(mgr))
 	mux.HandleFunc("/api/xui/clone", apiXUIClone(mgr))
 	mux.HandleFunc("/api/xui/detail", apiXUIDetail)
 	mux.HandleFunc("/api/xui/links", apiXUILinks)
+	mux.HandleFunc("/api/xui/delete", apiXUIDelete(mgr))
 
 	auth, created, err := NewAuth(*workDir)
 	if err != nil {
@@ -178,6 +185,76 @@ func apiRefresh(m *Manager) http.HandlerFunc {
 	}
 }
 
+// apiSwap 就地把一个出口换到别的节点，端口不变。
+func apiSwap(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		slot, err := strconv.Atoi(r.URL.Query().Get("slot"))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "slot 参数无效"})
+			return
+		}
+		if err := m.Swap(slot); err != nil {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"ok": "正在换节点"})
+	}
+}
+
+// apiRegions 给新建向导用：各地区还剩多少空闲节点。
+func apiRegions(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, m.Regions())
+	}
+}
+
+// apiExits 返回主界面需要的一切：出口以及挂在它上面的入站。
+func apiExits(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, m.ExitsOf())
+	}
+}
+
+// apiProvision 接收"开 N 个某地区的出口"这个意图，返回作业 id 供轮询。
+func apiProvision(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		count, err := strconv.Atoi(q.Get("count"))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "count 参数无效"})
+			return
+		}
+		tpl := 0
+		if s := q.Get("template"); s != "" {
+			if tpl, err = strconv.Atoi(s); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "template 参数无效"})
+				return
+			}
+		}
+		job, err := m.Provision(ProvisionRequest{
+			Region: q.Get("region"), Count: count, TemplateID: tpl,
+		})
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"job": job.ID()})
+	}
+}
+
+func apiJobs(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, m.jobs.Views())
+	}
+}
+
+func apiJobDismiss(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		m.jobs.Dismiss(r.URL.Query().Get("id"))
+		writeJSON(w, http.StatusOK, map[string]string{"ok": "已关闭"})
+	}
+}
+
 // apiXUIStatus 报告本机 3x-ui 的探测结果。
 func apiXUIStatus(w http.ResponseWriter, r *http.Request) {
 	x, err := DetectXUI()
@@ -200,17 +277,12 @@ func apiXUIStatus(w http.ResponseWriter, r *http.Request) {
 // apiXUIInbounds 列出面板里已有的入站及其绑定状态。
 func apiXUIInbounds(m *Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-	x, err := DetectXUI()
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-		return
-	}
-	list, err := x.Inbounds(liveHosts(m))
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, list)
+		list, err := cachedInbounds(liveHosts(m))
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, list)
 	}
 }
 
@@ -243,6 +315,7 @@ func apiXUIBind(m *Manager) http.HandlerFunc {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 			return
 		}
+		invalidateInbounds()
 		writeJSON(w, http.StatusOK, map[string]string{"ok": "已更新"})
 	}
 }
@@ -283,6 +356,7 @@ func apiXUIClone(m *Manager) http.HandlerFunc {
 			return
 		}
 		ports, err := x.CloneToTunnels(id, hosts, tunnels)
+		invalidateInbounds()
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "created": ports})
 			return
@@ -367,4 +441,32 @@ func apiXUILinks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"links": links})
+}
+
+// apiXUIDelete 删除入站。停掉出口后它的入站会留下来，用户需要一个清理入口。
+func apiXUIDelete(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var ids []int
+		for _, part := range strings.Split(r.URL.Query().Get("ids"), ",") {
+			if n, err := strconv.Atoi(strings.TrimSpace(part)); err == nil {
+				ids = append(ids, n)
+			}
+		}
+		if len(ids) == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "没有指定要删除的入站"})
+			return
+		}
+		x, err := DetectXUI()
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		err = x.DeleteInbounds(ids, m.Tunnels())
+		invalidateInbounds()
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]int{"deleted": len(ids)})
+	}
 }

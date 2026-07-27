@@ -926,6 +926,63 @@ func (x *XUI) InboundLinks(ids []int, publicHost string) ([]string, error) {
 	return out, nil
 }
 
+// DeleteInbounds 删除入站，并顺手清掉指向它们的 fanout 路由规则。
+// 面板的 del 只动 inbounds，残留的规则会让后续绑定读到不存在的入站标签。
+func (x *XUI) DeleteInbounds(ids []int, tunnels []*Tunnel) error {
+	for _, id := range ids {
+		if _, err := x.post(fmt.Sprintf("panel/api/inbounds/del/%d", id), nil); err != nil {
+			return fmt.Errorf("删除入站 %d 失败: %w", id, err)
+		}
+	}
+
+	setting, testURL, err := x.loadXray()
+	if err != nil {
+		return err
+	}
+	x.syncOutbounds(setting, tunnels)
+
+	remain, err := x.Inbounds(nil)
+	if err != nil {
+		return err
+	}
+	alive := map[string]bool{}
+	for _, ib := range remain {
+		alive[ib.Tag] = true
+	}
+
+	routing, _ := setting["routing"].(map[string]any)
+	if routing == nil {
+		routing = map[string]any{}
+	}
+	rules, _ := routing["rules"].([]any)
+	cleaned := make([]any, 0, len(rules))
+	for _, r := range rules {
+		m, ok := r.(map[string]any)
+		if !ok {
+			cleaned = append(cleaned, r)
+			continue
+		}
+		outTag, _ := m["outboundTag"].(string)
+		if !strings.HasPrefix(outTag, xuiTagPrefix) {
+			cleaned = append(cleaned, r)
+			continue
+		}
+		kept := []any{}
+		for _, it := range toStringSlice(m["inboundTag"]) {
+			if alive[it] {
+				kept = append(kept, it)
+			}
+		}
+		if len(kept) > 0 {
+			m["inboundTag"] = kept
+			cleaned = append(cleaned, m)
+		}
+	}
+	routing["rules"] = cleaned
+	setting["routing"] = routing
+	return x.saveXray(setting, testURL)
+}
+
 // Rebind 把原本绑到 oldHost 的入站改绑到新节点上。
 // 隧道换节点后出站 tag 会变，需要同步路由规则。
 func (x *XUI) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) error {

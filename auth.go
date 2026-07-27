@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -20,9 +21,26 @@ type Auth struct {
 	password string
 	mu       sync.RWMutex
 	sessions map[string]time.Time
+	// 按来源 IP 记录登录失败，挡低速凭据喷洒
+	fails map[string]*loginFails
+}
+
+// loginFails 跟踪单个来源 IP 的连续失败。
+type loginFails struct {
+	count   int
+	last    time.Time
+	blocked time.Time
 }
 
 const sessionTTL = 12 * time.Hour
+
+// 登录失败节流：同一 IP 连续错 loginMaxFails 次后，锁 loginBlockFor。
+// 阈值给得宽松，正常用户偶尔输错不受影响；成功登录会清零。
+const (
+	loginMaxFails  = 8
+	loginBlockFor  = 2 * time.Minute
+	loginFailReset = 10 * time.Minute
+)
 
 // NewAuth 载入或生成访问口令。返回口令是否为本次新建。
 func NewAuth(dir string) (*Auth, bool, error) {
@@ -47,6 +65,7 @@ func NewAuth(dir string) (*Auth, bool, error) {
 	return &Auth{
 		password: strings.TrimSpace(string(blob)),
 		sessions: map[string]time.Time{},
+		fails:    map[string]*loginFails{},
 	}, created, nil
 }
 
@@ -112,16 +131,73 @@ func (a *Auth) Wrap(next http.Handler) http.Handler {
 	})
 }
 
+// blocked 判断某来源 IP 是否处于登录冷却期。
+func (a *Auth) blocked(ip string) bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	f, ok := a.fails[ip]
+	return ok && time.Now().Before(f.blocked)
+}
+
+// recordFail 记一次失败，达到阈值就进入冷却。
+func (a *Auth) recordFail(ip string) {
+	now := time.Now()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	f, ok := a.fails[ip]
+	// 距上次失败太久就重新计数，避免长期累积误伤
+	if !ok || (f.blocked.IsZero() && now.Sub(f.last) > loginFailReset) {
+		f = &loginFails{}
+		a.fails[ip] = f
+	}
+	f.count++
+	f.last = now
+	if f.count >= loginMaxFails {
+		f.blocked = now.Add(loginBlockFor)
+		f.count = 0
+	}
+	// 顺手清掉早已过期的记录，别让 map 无限增长
+	for k, v := range a.fails {
+		if now.Sub(v.last) > loginFailReset && now.After(v.blocked) {
+			delete(a.fails, k)
+		}
+	}
+}
+
+// clearFails 登录成功后清掉该 IP 的失败记录。
+func (a *Auth) clearFails(ip string) {
+	a.mu.Lock()
+	delete(a.fails, ip)
+	a.mu.Unlock()
+}
+
+// clientIP 从 RemoteAddr 取来源 IP。服务直接监听公网端口、不在反代后，
+// 所以不采信 X-Forwarded-For 之类可伪造的头。
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
 func (a *Auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write([]byte(loginHTML))
 		return
 	}
+	ip := clientIP(r)
+	if a.blocked(ip) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "登录失败次数过多，请稍后再试"})
+		return
+	}
 	if !a.check(r.FormValue("password")) {
+		a.recordFail(ip)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "口令不对"})
 		return
 	}
+	a.clearFails(ip)
 	tok, err := a.issue()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})

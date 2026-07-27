@@ -389,8 +389,26 @@ function toast(msg, bad){
   toastTimer = setTimeout(() => { el.className = 'toast'; }, 2400);
 }
 async function copy(text){
-  try{ await navigator.clipboard.writeText(text); toast('已复制'); }
-  catch(e){ toast('复制失败，请手动选中', true); }
+  // navigator.clipboard 只在 HTTPS/localhost 下存在，而面板通常是 http://IP 访问，
+  // 所以必须留一条 execCommand 兜底路径，否则复制在正常使用场景里必然失败。
+  if(navigator.clipboard && window.isSecureContext){
+    try{ await navigator.clipboard.writeText(text); toast('已复制'); return; }
+    catch(e){}
+  }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  // 放在视口内但不可见：置于视口外会让 iOS 在聚焦时滚动页面
+  ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;padding:0;border:0';
+  document.body.appendChild(ta);
+  const prev = document.activeElement;
+  ta.focus();
+  ta.setSelectionRange(0, ta.value.length);
+  let ok = false;
+  try{ ok = document.execCommand('copy'); }catch(e){}
+  ta.remove();
+  if(prev && prev.focus) prev.focus();
+  toast(ok ? '已复制' : '复制失败，请手动选中', !ok);
 }
 
 let view = {exits:[], direct:[], panel:'', backend:''};

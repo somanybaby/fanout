@@ -144,6 +144,20 @@ label.chk input{margin:0}
 .kv dd{margin:0;word-break:break-all}
 .share{padding:10px;background:#0e1116;border:1px solid var(--line);
   border-radius:4px;word-break:break-all;font-size:12px;line-height:1.7;margin-bottom:8px}
+.editbar{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;
+  padding:12px 0;border-top:1px solid var(--line);margin-top:4px}
+.ef{display:block}
+.ef>span{display:block;color:var(--dim);font-size:11px;margin-bottom:4px}
+.ef input{width:150px}
+.chead{display:flex;align-items:center;gap:10px;margin:14px 0 8px;
+  padding-top:12px;border-top:1px solid var(--line)}
+.chead h3{font-size:12px;margin:0;font-weight:600;color:var(--dim)}
+.client{border:1px solid var(--line);border-radius:4px;padding:8px 10px;margin-bottom:8px}
+.crow{display:flex;align-items:center;gap:10px}
+.cemail{font-weight:600;font-size:12px}
+.cid{color:var(--dim);font-size:11px;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;max-width:280px}
+.client .share{margin:8px 0 0}
 .share button{margin-top:8px}
 textarea{width:100%;min-height:300px;background:#0e1116;border:1px solid var(--line);
   color:var(--text);border-radius:4px;
@@ -366,6 +380,7 @@ const ICON = {
   bad:'<svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
   run:'<svg viewBox="0 0 24 24" class="spin"><path d="M21 12a9 9 0 1 1-6.2-8.5"/></svg>',
   wait:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg>',
+  plus:'<svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>',
   trash:'<svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
   x:'<svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>'
 };
@@ -749,30 +764,119 @@ $('#stopall').onclick = async e => {
 };
 
 // ---- 节点详情 ----
-document.addEventListener('click', async e => {
-  const link = e.target.closest('[data-detail]');
-  if(!link) return;
+let curDetail = null;
+
+// 详情弹窗的重绘要跟轮询解耦：正在编辑时被 poll 刷掉输入会很烦
+async function openDetail(id){
   $('#dbody').innerHTML = '<div class="empty">读取中…</div>';
   openModal('detail');
   try{
-    const d = await api('/api/xui/detail?id=' + link.dataset.detail);
-    const owner = view.exits.find(x => (x.inbounds || []).some(i => i.id === d.id));
-    const exit = owner ? (owner.exit_ip || owner.host) + '（' + esc(owner.region) + '）' : '直连';
-    const links = (d.links || []).length
-      ? d.links.map(l => '<div class="share">' + esc(l)
-          + '<div><button data-copy="' + esc(l) + '">' + ICON.copy + '复制</button></div></div>').join('')
-      : '<div class="share">面板未生成分享链接</div>';
-    $('#dtitle').textContent = (d.remark || '节点') + '　:' + d.port;
-    $('#dbody').innerHTML = '<dl class="kv">'
-      + '<dt>出口</dt><dd>' + exit + '</dd>'
-      + '<dt>协议</dt><dd>' + esc(d.protocol) + '　' + esc(d.network || '')
-      +   (d.tls && d.tls !== 'none' ? '　' + esc(d.tls) : '') + '</dd>'
-      + '<dt>监听</dt><dd>' + esc(d.listen || '0.0.0.0') + ':' + d.port + '</dd>'
-      + '<dt>客户端</dt><dd>' + (d.clients || []).map(c => esc(c.email) + '　' + esc(c.id))
-          .join('<br>') + '</dd>'
-      + '</dl>' + links;
+    const d = await api('/api/xui/detail?id=' + id);
+    curDetail = d;
+    renderDetail(d);
   }catch(err){
     $('#dbody').innerHTML = '<div class="empty">读取失败: ' + esc(err.message) + '</div>';
+  }
+}
+
+function renderDetail(d){
+  const owner = view.exits.find(x => (x.inbounds || []).some(i => i.id === d.id));
+  const exit = owner ? esc((owner.exit_ip || owner.host) + '（' + owner.region + '）') : '直连';
+
+  const clients = (d.clients || []).map((c, i) => {
+    const link = (d.links || [])[i] || '';
+    return '<div class="client">'
+      + '<div class="crow">'
+      +   '<span class="cemail">' + esc(c.email) + '</span>'
+      +   '<span class="cid">' + esc(c.id) + '</span>'
+      +   '<span class="spacer"></span>'
+      +   (link ? '<button class="icon" data-copy="' + esc(link) + '" title="复制链接">' + ICON.copy + '</button>' : '')
+      +   '<button class="icon" data-creset="' + esc(c.email) + '" title="换一套凭据，旧链接立即失效">' + ICON.redo + '</button>'
+      +   '<button class="icon" data-cdel="' + esc(c.email) + '" title="删除这个客户端">' + ICON.trash + '</button>'
+      + '</div>'
+      + (link ? '<div class="share">' + esc(link) + '</div>' : '')
+      + '</div>';
+  }).join('');
+
+  $('#dtitle').textContent = (d.remark || '节点') + '　:' + d.port;
+  $('#dbody').innerHTML = '<dl class="kv">'
+    + '<dt>出口</dt><dd>' + exit + '</dd>'
+    + '<dt>协议</dt><dd>' + esc(d.protocol) + '　' + esc(d.network || '')
+    +   (d.tls && d.tls !== 'none' ? '　' + esc(d.tls) : '') + '</dd>'
+    + '<dt>监听</dt><dd>' + esc(d.listen || '0.0.0.0') + '</dd>'
+    + '</dl>'
+    + '<div class="editbar">'
+    +   '<label class="ef"><span>备注</span>'
+    +     '<input id="dremark" type="text" value="' + esc(d.remark || '') + '"></label>'
+    +   '<label class="ef"><span>端口</span>'
+    +     '<input id="dport" type="text" inputmode="numeric" value="' + d.port + '"></label>'
+    +   '<label class="chk"><input type="checkbox" id="denable"'
+    +     (d.enable === false ? '' : ' checked') + '> 启用</label>'
+    +   '<span class="spacer"></span>'
+    +   '<button class="primary" id="dsave">保存</button>'
+    + '</div>'
+    + '<div class="chead"><h3>客户端</h3><span class="count">'
+    +   (d.clients || []).length + ' 个</span><span class="spacer"></span>'
+    +   '<button id="dcadd">' + ICON.plus + '添加</button></div>'
+    + (clients || '<div class="empty">没有客户端</div>');
+}
+
+document.addEventListener('click', async e => {
+  const link = e.target.closest('[data-detail]');
+  if(link) return openDetail(link.dataset.detail);
+
+  if(e.target.closest('#dsave')){
+    const btn = e.target.closest('#dsave');
+    btn.disabled = true;
+    const q = new URLSearchParams({
+      id: curDetail.id,
+      port: ($('#dport').value || '').trim(),
+      remark: ($('#dremark').value || '').trim(),
+      enable: $('#denable').checked ? '1' : '0',
+    });
+    try{
+      await api('/api/panel/inbound/update?' + q, {method:'POST'});
+      toast('已保存');
+      await openDetail(curDetail.id);
+      poll();
+    }catch(err){ toast(err.message, true); btn.disabled = false; }
+    return;
+  }
+
+  const add = e.target.closest('#dcadd');
+  if(add){
+    add.disabled = true;
+    try{
+      await api('/api/panel/client/add?id=' + curDetail.id, {method:'POST'});
+      toast('已添加客户端');
+      await openDetail(curDetail.id);
+    }catch(err){ toast(err.message, true); add.disabled = false; }
+    return;
+  }
+
+  const del = e.target.closest('[data-cdel]');
+  if(del){
+    if(!confirm('删除客户端 ' + del.dataset.cdel + '？它的链接会立即失效。')) return;
+    del.disabled = true;
+    try{
+      await api('/api/panel/client/del?id=' + curDetail.id
+        + '&email=' + encodeURIComponent(del.dataset.cdel), {method:'POST'});
+      toast('已删除');
+      await openDetail(curDetail.id);
+    }catch(err){ toast(err.message, true); del.disabled = false; }
+    return;
+  }
+
+  const reset = e.target.closest('[data-creset]');
+  if(reset){
+    if(!confirm('重置 ' + reset.dataset.creset + ' 的凭据？已分发的旧链接会立即失效。')) return;
+    reset.disabled = true;
+    try{
+      await api('/api/panel/client/reset?id=' + curDetail.id
+        + '&email=' + encodeURIComponent(reset.dataset.creset), {method:'POST'});
+      toast('已重置');
+      await openDetail(curDetail.id);
+    }catch(err){ toast(err.message, true); reset.disabled = false; }
   }
 });
 

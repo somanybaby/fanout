@@ -96,6 +96,10 @@ func main() {
 	mux.HandleFunc("/api/xui/links", apiXUILinks)
 	mux.HandleFunc("/api/xui/delete", apiXUIDelete(mgr))
 	mux.HandleFunc("/api/panel/inbound/new", apiInboundCreate(mgr))
+	mux.HandleFunc("/api/panel/inbound/update", apiInboundUpdate(mgr))
+	mux.HandleFunc("/api/panel/client/add", apiClientAdd(mgr))
+	mux.HandleFunc("/api/panel/client/del", apiClientDelete(mgr))
+	mux.HandleFunc("/api/panel/client/reset", apiClientReset(mgr))
 
 	auth, created, err := NewAuth(*workDir)
 	if err != nil {
@@ -490,6 +494,92 @@ func apiXUIDelete(m *Manager) http.HandlerFunc {
 
 // apiInboundCreate 新建一个入站。只有自建模式提供这个能力：
 // 装了 3x-ui 时入站应当在面板里建，fanout 不去插手它的数据。
+// apiInboundUpdate 改入站的端口、备注与启停。两种后端都支持。
+func apiInboundUpdate(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p, err := openPanel()
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		q := r.URL.Query()
+		id, err := strconv.Atoi(q.Get("id"))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id 参数无效"})
+			return
+		}
+
+		// 只有真正传了的参数才改，没传的保持原样
+		var patch InboundPatch
+		if v := q.Get("port"); v != "" {
+			port, err := strconv.Atoi(v)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "端口无效"})
+				return
+			}
+			patch.Port = &port
+		}
+		if q.Has("remark") {
+			remark := q.Get("remark")
+			patch.Remark = &remark
+		}
+		if v := q.Get("enable"); v != "" {
+			enable := v == "1"
+			patch.Enable = &enable
+		}
+
+		err = p.UpdateInbound(id, patch, m.Tunnels())
+		invalidateInbounds()
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"ok": "已保存"})
+	}
+}
+
+// clientAction 把三个客户端操作的公共部分收拢：解析 id/email 再调后端。
+func clientAction(m *Manager, what string,
+	do func(p Panel, id int, email string, tunnels []*Tunnel) error) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p, err := openPanel()
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		id, err := strconv.Atoi(r.URL.Query().Get("id"))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id 参数无效"})
+			return
+		}
+		err = do(p, id, r.URL.Query().Get("email"), m.Tunnels())
+		invalidateInbounds()
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"ok": what})
+	}
+}
+
+func apiClientAdd(m *Manager) http.HandlerFunc {
+	return clientAction(m, "已添加", func(p Panel, id int, email string, t []*Tunnel) error {
+		return p.AddClient(id, email, t)
+	})
+}
+
+func apiClientDelete(m *Manager) http.HandlerFunc {
+	return clientAction(m, "已删除", func(p Panel, id int, email string, t []*Tunnel) error {
+		return p.DeleteClient(id, email, t)
+	})
+}
+
+func apiClientReset(m *Manager) http.HandlerFunc {
+	return clientAction(m, "已重置", func(p Panel, id int, email string, t []*Tunnel) error {
+		return p.ResetClient(id, email, t)
+	})
+}
+
 func apiInboundCreate(m *Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p, err := openPanel()

@@ -282,6 +282,128 @@ func (n *Native) DeleteInbounds(ids []int, tunnels []*Tunnel) error {
 	return n.apply(tunnels)
 }
 
+// UpdateInbound 改端口、备注与启停。
+//
+// 端口变了 inboundTag 也跟着变（tag 里含端口），所以路由规则要一起重写；
+// apply 是整份重建，天然覆盖了这点。
+func (n *Native) UpdateInbound(id int, patch InboundPatch, tunnels []*Tunnel) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	ib := n.store.byID(id)
+	if ib == nil {
+		return fmt.Errorf("入站 %d 不存在", id)
+	}
+
+	if patch.Port != nil && *patch.Port != ib.Port {
+		port := *patch.Port
+		if port < 1 || port > 65535 {
+			return fmt.Errorf("端口 %d 不在合法范围", port)
+		}
+		for _, other := range n.store.Inbounds {
+			if other.ID != id && other.Port == port {
+				return fmt.Errorf("端口 %d 已被入站 %q 占用", port, other.Remark)
+			}
+		}
+		ib.Port = port
+	}
+	if patch.Remark != nil {
+		if r := strings.TrimSpace(*patch.Remark); r != "" {
+			ib.Remark = r
+		}
+	}
+	if patch.Enable != nil {
+		ib.Enable = *patch.Enable
+	}
+	return n.apply(tunnels)
+}
+
+// AddClient 给入站加一个客户端。同一入站上可以有多套凭据，便于分发给不同人。
+func (n *Native) AddClient(id int, email string, tunnels []*Tunnel) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	ib := n.store.byID(id)
+	if ib == nil {
+		return fmt.Errorf("入站 %d 不存在", id)
+	}
+
+	email = strings.TrimSpace(email)
+	if email == "" {
+		email = fmt.Sprintf("%s-%d-%s", ib.Protocol, ib.Port, randomHex(3))
+	}
+	for _, c := range ib.Clients {
+		if c.Email == email {
+			return fmt.Errorf("客户端 %q 已存在", email)
+		}
+	}
+
+	ib.Clients = append(ib.Clients, nativeClient{
+		Email:    email,
+		ID:       newUUID(),
+		Password: randomHex(8),
+		Enable:   true,
+		Flow:     visionFlow(ib),
+	})
+	return n.apply(tunnels)
+}
+
+// DeleteClient 摘掉一个客户端。留下最后一个是有意的：
+// 没有任何客户端的入站在 Xray 里虽然合法，但谁也连不上，只会让人以为坏了。
+func (n *Native) DeleteClient(id int, email string, tunnels []*Tunnel) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	ib := n.store.byID(id)
+	if ib == nil {
+		return fmt.Errorf("入站 %d 不存在", id)
+	}
+	if len(ib.Clients) <= 1 {
+		return fmt.Errorf("这是最后一个客户端，删掉就没人能连了")
+	}
+
+	kept := make([]nativeClient, 0, len(ib.Clients))
+	for _, c := range ib.Clients {
+		if c.Email != email {
+			kept = append(kept, c)
+		}
+	}
+	if len(kept) == len(ib.Clients) {
+		return fmt.Errorf("客户端 %q 不存在", email)
+	}
+	ib.Clients = kept
+	return n.apply(tunnels)
+}
+
+// ResetClient 换一套新凭据，旧链接立即失效。
+func (n *Native) ResetClient(id int, email string, tunnels []*Tunnel) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	ib := n.store.byID(id)
+	if ib == nil {
+		return fmt.Errorf("入站 %d 不存在", id)
+	}
+	for i := range ib.Clients {
+		if ib.Clients[i].Email == email {
+			ib.Clients[i].ID = newUUID()
+			ib.Clients[i].Password = randomHex(8)
+			return n.apply(tunnels)
+		}
+	}
+	return fmt.Errorf("客户端 %q 不存在", email)
+}
+
+// visionFlow 沿用入站已有客户端的 flow，让新加的客户端与其余保持一致。
+func visionFlow(ib *nativeInbound) string {
+	for _, c := range ib.Clients {
+		if c.Flow != "" {
+			return c.Flow
+		}
+	}
+	return ""
+}
+
 // NewInboundSpec 是自建模式下新建入站的参数。
 //
 // 留空的字段都有合理默认：端口随机、备注按协议加端口自动生成、

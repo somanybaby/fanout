@@ -52,8 +52,8 @@ var (
 )
 
 var (
-	reXUIPort  = regexp.MustCompile(`(?m)^port:\s*(\d+)`)
-	reXUIBase  = regexp.MustCompile(`(?m)^webBasePath:\s*(\S+)`)
+	reXUIPort = regexp.MustCompile(`(?m)^port:\s*(\d+)`)
+	reXUIBase = regexp.MustCompile(`(?m)^webBasePath:\s*(\S+)`)
 	// 只认 "apiToken: xxx" 这一行，避免匹配到提示文字里的长单词
 	reXUIToken = regexp.MustCompile(`(?m)^apiToken:\s*([A-Za-z0-9]+)`)
 	// 面板开了 TLS 时 setting -show 会打印 "Panel is secure with SSL"
@@ -278,7 +278,6 @@ func (x *XUI) saveXray(setting map[string]any, testURL string) error {
 	return nil
 }
 
-
 // Inbound 是面板里已有的一个入站。
 type Inbound struct {
 	ID       int    `json:"id"`
@@ -298,11 +297,11 @@ func (x *XUI) Inbounds(live map[string]bool) ([]Inbound, error) {
 		return nil, err
 	}
 	var raw []struct {
-		ID       int    `json:"id"`
-		Port     int    `json:"port"`
-		Protocol string `json:"protocol"`
-		Remark   string `json:"remark"`
-		Enable   bool   `json:"enable"`
+		ID       int             `json:"id"`
+		Port     int             `json:"port"`
+		Protocol string          `json:"protocol"`
+		Remark   string          `json:"remark"`
+		Enable   bool            `json:"enable"`
 		Stream   json.RawMessage `json:"streamSettings"`
 	}
 	if err := json.Unmarshal(obj, &raw); err != nil {
@@ -1033,30 +1032,14 @@ func renameExitSuffix(remark, newLabel string) string {
 	return strings.Join(keep, "-") + "-" + newLabel
 }
 
-// renameInbound 只改备注，其余配置原样写回。
-func (x *XUI) renameInbound(id int, remark string) error {
-	raw, err := x.rawInbound(id)
-	if err != nil {
-		return err
-	}
-	payload := map[string]any{
-		"enable":         raw["enable"],
-		"remark":         remark,
-		"listen":         fmt.Sprint(orEmpty(raw["listen"])),
-		"port":           int(toFloat(raw["port"])),
-		"protocol":       fmt.Sprint(raw["protocol"]),
-		"expiryTime":     0,
-		"total":          0,
-		"settings":       mustJSONField(raw["settings"]),
-		"streamSettings": mustJSONField(raw["streamSettings"]),
-		"sniffing":       mustJSONField(raw["sniffing"]),
-		"allocate":       mustJSON(map[string]any{}),
-	}
+// postJSON 向面板发一个 JSON 体的请求，并解析它统一的 success/msg 信封。
+// 面板的 inbounds/clients 写接口都收 JSON 而不是表单，所以不能走 x.call。
+func (x *XUI) postJSON(path string, payload any, what string) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-	endpoint := fmt.Sprintf("%s/panel/api/inbounds/update/%d", x.base(), id)
+	endpoint := fmt.Sprintf("%s/%s", x.base(), strings.TrimPrefix(path, "/"))
 	req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(string(body)))
 	if err != nil {
 		return err
@@ -1075,12 +1058,234 @@ func (x *XUI) renameInbound(id int, remark string) error {
 		Msg     string `json:"msg"`
 	}
 	if err := json.Unmarshal(blob, &envelope); err != nil {
-		return fmt.Errorf("解析改名响应失败: %s", strings.TrimSpace(string(blob)))
+		return fmt.Errorf("解析%s响应失败: %s", what, strings.TrimSpace(string(blob)))
 	}
 	if !envelope.Success {
-		return fmt.Errorf("改名失败: %s", envelope.Msg)
+		return fmt.Errorf("%s失败: %s", what, envelope.Msg)
 	}
 	return nil
+}
+
+// inboundPayload 把面板返回的原始入站转成 update 接口要的形状。
+// 面板的 update 是整体覆盖，没带上的字段会被清掉，所以要原样回填。
+func inboundPayload(raw map[string]any) map[string]any {
+	return map[string]any{
+		"enable":         raw["enable"],
+		"remark":         fmt.Sprint(orEmpty(raw["remark"])),
+		"listen":         fmt.Sprint(orEmpty(raw["listen"])),
+		"port":           int(toFloat(raw["port"])),
+		"protocol":       fmt.Sprint(raw["protocol"]),
+		"expiryTime":     0,
+		"total":          0,
+		"settings":       mustJSONField(raw["settings"]),
+		"streamSettings": mustJSONField(raw["streamSettings"]),
+		"sniffing":       mustJSONField(raw["sniffing"]),
+		"allocate":       mustJSON(map[string]any{}),
+	}
+}
+
+// updateInboundRaw 读出入站、让 mutate 改 payload，再整体写回。
+func (x *XUI) updateInboundRaw(id int, what string, mutate func(payload map[string]any, raw map[string]any) error) error {
+	raw, err := x.rawInbound(id)
+	if err != nil {
+		return err
+	}
+	payload := inboundPayload(raw)
+	if mutate != nil {
+		if err := mutate(payload, raw); err != nil {
+			return err
+		}
+	}
+	return x.postJSON(fmt.Sprintf("panel/api/inbounds/update/%d", id), payload, what)
+}
+
+// renameInbound 只改备注，其余配置原样写回。
+func (x *XUI) renameInbound(id int, remark string) error {
+	return x.updateInboundRaw(id, "改名", func(p, _ map[string]any) error {
+		p["remark"] = remark
+		return nil
+	})
+}
+
+// UpdateInbound 改端口、备注与启停，其余配置原样写回。
+//
+// 改端口会同时改掉 inboundTag（面板用 in-<端口>-<网络> 命名），
+// 所以绑定关系要跟着迁移，否则路由规则会指向一个不存在的入站。
+func (x *XUI) UpdateInbound(id int, patch InboundPatch, tunnels []*Tunnel) error {
+	if patch.Port != nil {
+		used, err := x.usedPorts()
+		if err != nil {
+			return err
+		}
+		cur, err := x.rawInbound(id)
+		if err != nil {
+			return err
+		}
+		if p := *patch.Port; p != int(toFloat(cur["port"])) && used[p] {
+			return fmt.Errorf("端口 %d 已被别的入站占用", p)
+		}
+	}
+
+	// 改端口前记下旧 tag 与它的绑定，改完再按新 tag 绑回去
+	var oldTag, boundTo string
+	if patch.Port != nil {
+		list, err := x.Inbounds(nil)
+		if err != nil {
+			return err
+		}
+		for _, ib := range list {
+			if ib.ID == id {
+				oldTag, boundTo = ib.Tag, ib.BoundTo
+				break
+			}
+		}
+	}
+
+	if err := x.updateInboundRaw(id, "改入站", func(p, _ map[string]any) error {
+		if patch.Port != nil {
+			p["port"] = *patch.Port
+		}
+		if patch.Remark != nil {
+			p["remark"] = *patch.Remark
+		}
+		if patch.Enable != nil {
+			p["enable"] = *patch.Enable
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	if oldTag == "" || boundTo == "" {
+		return nil
+	}
+	// 端口变了 tag 也变了，把绑定迁到新 tag 上
+	list, err := x.Inbounds(nil)
+	if err != nil {
+		return err
+	}
+	for _, ib := range list {
+		if ib.ID != id || ib.Tag == oldTag {
+			continue
+		}
+		var host string
+		for _, t := range tunnels {
+			if sanitizeTag(t.Node.HostName) == boundTo {
+				host = t.Node.HostName
+				break
+			}
+		}
+		if host == "" {
+			return nil
+		}
+		return x.Bind(ib.Tag, host, tunnels)
+	}
+	return nil
+}
+
+// AddClient 给入站加一个客户端。
+func (x *XUI) AddClient(id int, email string, tunnels []*Tunnel) error {
+	raw, err := x.rawInbound(id)
+	if err != nil {
+		return err
+	}
+	proto := fmt.Sprint(raw["protocol"])
+	if email == "" {
+		email = fmt.Sprintf("%s-%d-%s", proto, int(toFloat(raw["port"])), randomHex(3))
+	}
+	return x.updateInboundRaw(id, "加客户端", func(p, raw map[string]any) error {
+		settings, err := asObject(raw["settings"])
+		if err != nil {
+			return fmt.Errorf("解析 settings 失败: %w", err)
+		}
+		clients, _ := settings["clients"].([]any)
+		for _, c := range clients {
+			if cm, ok := c.(map[string]any); ok && fmt.Sprint(orEmpty(cm["email"])) == email {
+				return fmt.Errorf("客户端 %s 已存在", email)
+			}
+		}
+		settings["clients"] = append(clients, newClientEntry(proto, email))
+		p["settings"] = mustJSON(settings)
+		return nil
+	})
+}
+
+// DeleteClient 摘掉入站上的一个客户端。
+func (x *XUI) DeleteClient(id int, email string, tunnels []*Tunnel) error {
+	return x.updateInboundRaw(id, "删客户端", func(p, raw map[string]any) error {
+		settings, err := asObject(raw["settings"])
+		if err != nil {
+			return fmt.Errorf("解析 settings 失败: %w", err)
+		}
+		clients, _ := settings["clients"].([]any)
+		kept := make([]any, 0, len(clients))
+		for _, c := range clients {
+			if cm, ok := c.(map[string]any); ok && fmt.Sprint(orEmpty(cm["email"])) == email {
+				continue
+			}
+			kept = append(kept, c)
+		}
+		if len(kept) == len(clients) {
+			return fmt.Errorf("客户端 %s 不存在", email)
+		}
+		if len(kept) == 0 {
+			return fmt.Errorf("这是最后一个客户端，删掉入站就没人能连了")
+		}
+		settings["clients"] = kept
+		p["settings"] = mustJSON(settings)
+		return nil
+	})
+}
+
+// ResetClient 换掉客户端凭据，已分发的旧链接随即失效。
+func (x *XUI) ResetClient(id int, email string, tunnels []*Tunnel) error {
+	return x.updateInboundRaw(id, "重置凭据", func(p, raw map[string]any) error {
+		proto := fmt.Sprint(raw["protocol"])
+		settings, err := asObject(raw["settings"])
+		if err != nil {
+			return fmt.Errorf("解析 settings 失败: %w", err)
+		}
+		clients, _ := settings["clients"].([]any)
+		found := false
+		for _, c := range clients {
+			cm, ok := c.(map[string]any)
+			if !ok || fmt.Sprint(orEmpty(cm["email"])) != email {
+				continue
+			}
+			found = true
+			if proto == "trojan" {
+				cm["password"] = randomHex(8)
+			} else {
+				cm["id"] = newUUID()
+			}
+		}
+		if !found {
+			return fmt.Errorf("客户端 %s 不存在", email)
+		}
+		settings["clients"] = clients
+		p["settings"] = mustJSON(settings)
+		return nil
+	})
+}
+
+// newClientEntry 按协议造一个新客户端条目。
+func newClientEntry(proto, email string) map[string]any {
+	// 字段与面板自己生成的客户端保持一致：tgId 是数字（给字符串面板会直接报
+	// json unmarshal 错），subId 留空由面板按需分配。
+	c := map[string]any{
+		"email": email, "enable": true, "comment": "", "security": "",
+		"expiryTime": 0, "totalGB": 0, "limitIp": 0,
+		"tgId": 0, "subId": "", "reset": 0,
+	}
+	if proto == "trojan" {
+		c["password"] = randomHex(8)
+	} else {
+		c["id"] = newUUID()
+	}
+	if proto == "vless" {
+		c["flow"] = ""
+	}
+	return c
 }
 
 // mustJSONField 兼容字段是对象或已编码字符串两种情况，统一输出字符串。

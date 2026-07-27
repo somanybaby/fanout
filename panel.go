@@ -27,6 +27,16 @@ type Panel interface {
 	CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) ([]int, error)
 	DeleteInbounds(ids []int, tunnels []*Tunnel) error
 
+	// UpdateInbound 改端口、备注与启停。只有非零/非 nil 的字段会被写入。
+	UpdateInbound(id int, patch InboundPatch, tunnels []*Tunnel) error
+
+	// AddClient 给入站加一个客户端，email 留空时自动命名。
+	AddClient(id int, email string, tunnels []*Tunnel) error
+	// DeleteClient 摘掉入站上的一个客户端。
+	DeleteClient(id int, email string, tunnels []*Tunnel) error
+	// ResetClient 换掉客户端的凭据（UUID / trojan 密码），已分发的旧链接随即失效。
+	ResetClient(id int, email string, tunnels []*Tunnel) error
+
 	// OnTunnelsChanged 在隧道集合变化后调用。
 	//
 	// 自建模式的出站完全由隧道列表推导，新开的出口必须重建配置才有对应出站；
@@ -37,6 +47,13 @@ type Panel interface {
 	// Close 释放后端占用的资源。自建模式要停掉自己拉起的 Xray，
 	// 否则 fanout 退出后它会变成孤儿进程，下次启动撞端口。
 	Close()
+}
+
+// InboundPatch 描述对入站的一次局部修改。指针为 nil 表示该字段不动。
+type InboundPatch struct {
+	Port   *int
+	Remark *string
+	Enable *bool
 }
 
 // closePanel 在进程退出时释放后端资源。

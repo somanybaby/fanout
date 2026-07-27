@@ -41,6 +41,19 @@ bash <(curl -fsSL https://raw.githubusercontent.com/byJoey/fanout/main/install.s
 apt、dnf、yum、pacman、apk、zypper 都认。没装 3x-ui 时还会顺带下载一份
 Xray 到 `/var/lib/fanout/bin/`，装了则跳过，入站交给面板管。
 
+服务用 systemd 或 OpenRC 都能装，装完自动开机自启。
+
+**Alpine** 默认不带 bash，先装一下：
+
+```bash
+apk add bash
+bash <(curl -fsSL https://raw.githubusercontent.com/byJoey/fanout/main/install.sh)
+```
+
+另外 fanout 要在 netns 里跑 openvpn，**宿主必须放开 `/dev/net/tun`**。
+不少 LXC 小鸡没给这个权限，`ls /dev/net/tun` 不存在且 `mknod` 报
+Operation not permitted 的话，这台机器用不了，跟发行版无关。
+
 装完敲 `f` 打开管理菜单：
 
 ![管理菜单](https://images.joeyblog.net/2026/7/26/fanout-7-menu.png)

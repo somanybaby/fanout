@@ -91,7 +91,7 @@ func stripANSI(s string) string {
 
 // DetectXUI 探测本机 3x-ui。未安装或未运行时返回错误。
 func DetectXUI() (*XUI, error) {
-	if err := exec.Command("systemctl", "is-active", "--quiet", "x-ui").Run(); err != nil {
+	if !xuiRunning() {
 		return nil, fmt.Errorf("本机未安装或未运行 3x-ui")
 	}
 
@@ -1341,4 +1341,18 @@ func forceIPv4(outbound map[string]any) {
 		outbound["settings"] = settings
 	}
 	settings["domainStrategy"] = "UseIPv4"
+}
+
+// xuiRunning 判断 3x-ui 服务是否在跑。
+//
+// Alpine 这类发行版用 OpenRC 而不是 systemd，只查 systemctl 会误判成"没装"，
+// 于是装了面板也会退回自建模式，两个 Xray 抢端口。
+func xuiRunning() bool {
+	if exec.Command("systemctl", "is-active", "--quiet", "x-ui").Run() == nil {
+		return true
+	}
+	if exec.Command("rc-service", "x-ui", "status").Run() == nil {
+		return true
+	}
+	return false
 }

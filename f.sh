@@ -13,12 +13,68 @@ need_root() {
   [[ $EUID -eq 0 ]] || { echo -e "${R}需要 root${N}"; exit 1; }
 }
 
+# ── init 系统抽象：systemd 与 OpenRC ────────────────────
+if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+  INIT_SYS=systemd
+  UNIT=/etc/systemd/system/${SERVICE}.service
+else
+  INIT_SYS=openrc
+  UNIT=/etc/init.d/${SERVICE}
+fi
+
+svc_start()   { [[ $INIT_SYS == systemd ]] && systemctl start "$SERVICE"   || rc-service "$SERVICE" start; }
+svc_stop()    { [[ $INIT_SYS == systemd ]] && systemctl stop "$SERVICE"    || rc-service "$SERVICE" stop; }
+svc_restart() { [[ $INIT_SYS == systemd ]] && systemctl restart "$SERVICE" || rc-service "$SERVICE" restart; }
+svc_reload()  { [[ $INIT_SYS == systemd ]] && systemctl daemon-reload || true; }
+svc_enable()  { [[ $INIT_SYS == systemd ]] && systemctl enable "$SERVICE" >/dev/null 2>&1 || rc-update add "$SERVICE" default >/dev/null 2>&1; }
+svc_disable() { [[ $INIT_SYS == systemd ]] && systemctl disable "$SERVICE" >/dev/null 2>&1 || rc-update del "$SERVICE" default >/dev/null 2>&1; }
+
+svc_is_enabled() {
+  if [[ $INIT_SYS == systemd ]]; then
+    systemctl is-enabled --quiet "$SERVICE"
+  else
+    rc-update show default 2>/dev/null | grep -q "^ *${SERVICE} "
+  fi
+}
+
+svc_enabled_text() {
+  svc_is_enabled && echo enabled || echo disabled
+}
+
+svc_status_page() {
+  if [[ $INIT_SYS == systemd ]]; then
+    systemctl status "$SERVICE" --no-pager
+  else
+    rc-service "$SERVICE" status
+  fi
+}
+
+svc_logs() {
+  if [[ $INIT_SYS == systemd ]]; then
+    journalctl -u "$SERVICE" -n "${1:-50}" --no-pager
+  else
+    tail -n "${1:-50}" /var/log/${SERVICE}.log 2>/dev/null || echo "  暂无日志"
+  fi
+}
+
+svc_logs_follow() {
+  if [[ $INIT_SYS == systemd ]]; then
+    journalctl -u "$SERVICE" -f
+  else
+    tail -f /var/log/${SERVICE}.log
+  fi
+}
+
 svc_state() {
-  systemctl is-active --quiet "$SERVICE" && echo running || echo stopped
+  if [[ $INIT_SYS == systemd ]]; then
+    systemctl is-active --quiet "$SERVICE" && echo running || echo stopped
+  else
+    rc-service "$SERVICE" status >/dev/null 2>&1 && echo running || echo stopped
+  fi
 }
 
 web_port() {
-  grep -oE '\-web [0-9]+' /etc/systemd/system/${SERVICE}.service 2>/dev/null \
+  grep -oE '\-web [0-9]+' "$UNIT" 2>/dev/null \
     | grep -oE '[0-9]+' | head -1 || echo 8899
 }
 
@@ -45,7 +101,7 @@ show_info() {
     echo -e "  状态      ${R}已停止${N}"
   fi
   echo -e "  版本      $("$BIN" -version 2>/dev/null || echo '-')"
-  echo -e "  开机自启  $(systemctl is-enabled "$SERVICE" 2>/dev/null || echo '-')"
+  echo -e "  开机自启  $(svc_enabled_text)"
   echo
   echo -e "  ${B}管理地址  http://${ip}:${port}/${bp}/${N}"
   echo -e "  ${B}访问口令  ${pw}${N}"
@@ -70,28 +126,23 @@ list_tunnels() {
     > "$ck.json" 2>/dev/null
   rm -f "$ck"
 
-  python3 - "$ck.json" <<'PYEOF'
-import sys, json
-
-try:
-    with open(sys.argv[1]) as f:
-        rows = json.load(f)
-except Exception:
-    print("  读取失败，服务可能没在运行")
-    sys.exit()
-
-if not isinstance(rows, list) or not rows:
-    print("  还没有隧道，去网页里添加")
-    sys.exit()
-
-print("  端口      状态       出口 IP           节点")
-for t in rows:
-    port = str(t.get("port", "-"))
-    status = t.get("status", "-")
-    exit_ip = t.get("exit_ip") or "-"
-    host = t.get("node", {}).get("hostname", "-")
-    print("  %-10s%-11s%-18s%s" % (port, status, exit_ip, host))
-PYEOF
+  # 用 sed/awk 解析而不是 python3/jq：Alpine 最小安装两者都没有，
+  # 为了一条列表命令再拉依赖不值当。字段固定，按对象拆行足够稳。
+  if [[ ! -s "$ck.json" ]] || ! grep -q '"port"' "$ck.json" 2>/dev/null; then
+    echo "  还没有隧道，去网页里添加"
+  else
+    printf "  %-10s%-11s%-18s%s\n" "端口" "状态" "出口 IP" "节点"
+    # 按 {"slot" 切分而不是按 }：node 是嵌套对象，按 } 切会把一条记录劈成两半
+    sed 's/{"slot"/\n{"slot"/g' "$ck.json" | while IFS= read -r line; do
+      case "$line" in *'"slot"'*) ;; *) continue ;; esac
+      p=$(echo "$line"  | sed -n 's/.*"port":\([0-9]*\).*/\1/p')
+      st=$(echo "$line" | sed -n 's/.*"status":"\([^"]*\)".*/\1/p')
+      ip=$(echo "$line" | sed -n 's/.*"exit_ip":"\([^"]*\)".*/\1/p')
+      hn=$(echo "$line" | sed -n 's/.*"hostname":"\([^"]*\)".*/\1/p')
+      [[ -z $p ]] && continue
+      printf "  %-10s%-11s%-18s%s\n" "$p" "${st:--}" "${ip:--}" "${hn:--}"
+    done
+  fi
   rm -f "$ck.json"
 }
 
@@ -107,9 +158,9 @@ change_port() {
   if ss -tln 2>/dev/null | grep -q ":${new} "; then
     echo -e "  ${R}端口 ${new} 已被占用${N}"; return
   fi
-  sed -i "s/-web ${cur}/-web ${new}/" /etc/systemd/system/${SERVICE}.service
-  systemctl daemon-reload
-  systemctl restart "$SERVICE"
+  sed -i "s/-web ${cur}/-web ${new}/" "$UNIT"
+  svc_reload
+  svc_restart
   echo -e "  ${G}已改为 ${new} 并重启${N}"
 }
 
@@ -122,7 +173,7 @@ reset_password() {
   fi
   umask 077
   echo "$pw" > "$WORK_DIR/password"
-  systemctl restart "$SERVICE"
+  svc_restart
   echo -e "  ${G}新口令: ${pw}${N}"
 }
 
@@ -132,14 +183,14 @@ reset_basepath() {
   read -rp "  新访问路径 (留空则随机生成): " bp
   if [[ -z $bp ]]; then
     rm -f "$WORK_DIR/basepath"
-    systemctl restart "$SERVICE"
+    svc_restart
     sleep 2
     bp=$(cat "$WORK_DIR/basepath" 2>/dev/null)
   else
     bp=${bp#/}; bp=${bp%/}
     umask 077
     echo "$bp" > "$WORK_DIR/basepath"
-    systemctl restart "$SERVICE"
+    svc_restart
   fi
   echo -e "  ${G}新路径: /${bp}/${N}"
 }
@@ -177,7 +228,7 @@ EOF
   sysctl -qw net.ipv6.conf.all.disable_ipv6=1
   sysctl -qw net.ipv6.conf.default.disable_ipv6=1
   sysctl -qw net.ipv6.conf.lo.disable_ipv6=1
-  systemctl restart "$SERVICE" 2>/dev/null
+  svc_restart >/dev/null 2>&1
   echo -e "  ${G}已禁用 IPv6（重启后依然生效）${N}"
 }
 
@@ -208,9 +259,9 @@ do_update() {
     echo -e "  ${R}下载失败${N}"; rm -rf "$tmp"; return
   fi
   tar xzf "$tmp/f.tar.gz" -C "$tmp"
-  systemctl stop "$SERVICE"
+  svc_stop
   install -m 755 "$tmp/fanout" "$BIN"
-  systemctl start "$SERVICE"
+  svc_start
   rm -rf "$tmp"
   echo -e "  ${G}已更新到 $("$BIN" -version 2>/dev/null)${N}"
 }
@@ -221,8 +272,8 @@ do_uninstall() {
   read -rp "  确认卸载？隧道和配置都会删除 [y/N]: " yes
   [[ ${yes,,} == y ]] || { echo "  已取消"; return; }
 
-  systemctl stop "$SERVICE" 2>/dev/null
-  systemctl disable "$SERVICE" 2>/dev/null
+  svc_stop >/dev/null 2>&1
+  svc_disable
   # 清掉残留的 netns 与 veth
   for ns in $(ip netns list 2>/dev/null | awk '{print $1}' | grep '^fo[0-9]'); do
     ip netns del "$ns" 2>/dev/null
@@ -230,9 +281,9 @@ do_uninstall() {
   for l in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep '^fov[0-9]'); do
     ip link del "$l" 2>/dev/null
   done
-  rm -f /etc/systemd/system/${SERVICE}.service "$BIN" /usr/local/bin/f
+  rm -f "$UNIT" "$BIN" /usr/local/bin/f
   rm -rf "$WORK_DIR"
-  systemctl daemon-reload
+  svc_reload
   echo -e "  ${G}已卸载${N}"
   exit 0
 }
@@ -258,21 +309,21 @@ menu() {
     read -rp "  选择: " choice
 
     case "$choice" in
-      1) systemctl start "$SERVICE"   && echo -e "\n  ${G}已启动${N}"; pause ;;
-      2) systemctl stop "$SERVICE"    && echo -e "\n  ${Y}已停止${N}"; pause ;;
-      3) systemctl restart "$SERVICE" && echo -e "\n  ${G}已重启${N}"; pause ;;
-      4) echo; journalctl -u "$SERVICE" -n 40 --no-pager; pause ;;
+      1) svc_start   && echo -e "\n  ${G}已启动${N}"; pause ;;
+      2) svc_stop    && echo -e "\n  ${Y}已停止${N}"; pause ;;
+      3) svc_restart && echo -e "\n  ${G}已重启${N}"; pause ;;
+      4) echo; svc_logs 40; pause ;;
       5) list_tunnels; pause ;;
       6) show_info; pause ;;
       7) change_port; pause ;;
       8) reset_password; pause ;;
       9) reset_basepath; pause ;;
       10)
-        if systemctl is-enabled --quiet "$SERVICE"; then
-          systemctl disable "$SERVICE" >/dev/null 2>&1
+        if svc_is_enabled; then
+          svc_disable
           echo -e "\n  ${Y}已关闭开机自启${N}"
         else
-          systemctl enable "$SERVICE" >/dev/null 2>&1
+          svc_enable
           echo -e "\n  ${G}已开启开机自启${N}"
         fi
         pause ;;
@@ -289,11 +340,11 @@ need_root
 
 # 带参数时当普通命令用，不进菜单
 case "${1:-}" in
-  start)    systemctl start "$SERVICE" ;;
-  stop)     systemctl stop "$SERVICE" ;;
-  restart)  systemctl restart "$SERVICE" ;;
-  status)   systemctl status "$SERVICE" --no-pager ;;
-  log)      journalctl -u "$SERVICE" -f ;;
+  start)    svc_start ;;
+  stop)     svc_stop ;;
+  restart)  svc_restart ;;
+  status)   svc_status_page ;;
+  log)      svc_logs_follow ;;
   info)     show_info ;;
   list)     list_tunnels ;;
   update)   do_update ;;

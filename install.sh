@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# fanout 安装脚本：编译、装 systemd 服务、开机自启。
+# fanout 安装脚本：装二进制、装服务（systemd 或 OpenRC）、开机自启。
+#
+# Alpine 默认不带 bash，先装再跑：
+#   apk add bash && bash <(curl -fsSL .../install.sh)
+
 set -euo pipefail
 
 WEB_PORT="${WEB_PORT:-8899}"
@@ -10,6 +14,65 @@ if [[ $EUID -ne 0 ]]; then
   echo "需要 root 权限（要创建 netns 和改 iptables）" >&2
   exit 1
 fi
+
+# ── init 系统抽象：systemd 与 OpenRC 两套 ────────────────
+INIT_SYS=""
+if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+  INIT_SYS=systemd
+elif command -v rc-service >/dev/null 2>&1; then
+  INIT_SYS=openrc
+else
+  echo "不认识的 init 系统（需要 systemd 或 OpenRC）" >&2
+  exit 1
+fi
+
+svc_install() {
+  if [[ "$INIT_SYS" == systemd ]]; then
+    sed "s#-web 8899#-web ${WEB_PORT}#; s#-dir /var/lib/fanout#-dir ${WORK_DIR}#" fanout.service \
+      > /etc/systemd/system/fanout.service
+    systemctl daemon-reload
+  else
+    # OpenRC 没有 systemd 那套单元文件，直接写 init script。
+    # supervise-daemon 负责守护与重启，等价于 Restart=on-failure。
+    cat > /etc/init.d/fanout <<INITEOF
+#!/sbin/openrc-run
+name="fanout"
+description="fanout - VPN Gate 出口扇出网关"
+command="${BIN}"
+command_args="-web ${WEB_PORT} -dir ${WORK_DIR}"
+command_background=true
+pidfile="/run/fanout.pid"
+output_log="/var/log/fanout.log"
+error_log="/var/log/fanout.log"
+respawn_delay=5
+respawn_max=0
+supervisor=supervise-daemon
+depend() { need net; after firewall; }
+INITEOF
+    chmod +x /etc/init.d/fanout
+  fi
+}
+
+svc_enable_start() {
+  if [[ "$INIT_SYS" == systemd ]]; then
+    systemctl enable --now fanout
+  else
+    rc-update add fanout default >/dev/null 2>&1 || true
+    rc-service fanout restart
+  fi
+}
+
+svc_is_active() {
+  if [[ "$INIT_SYS" == systemd ]]; then
+    systemctl is-active --quiet fanout
+  else
+    rc-service fanout status >/dev/null 2>&1
+  fi
+}
+
+svc_logs_hint() {
+  [[ "$INIT_SYS" == systemd ]] && echo "journalctl -u fanout -n 30" || echo "cat /var/log/fanout.log"
+}
 
 echo "[1/6] 检查依赖"
 
@@ -167,15 +230,13 @@ else
 fi
 mkdir -p "$WORK_DIR"
 chmod 700 "$WORK_DIR"
-sed "s#-web 8899#-web ${WEB_PORT}#; s#-dir /var/lib/fanout#-dir ${WORK_DIR}#" fanout.service \
-  > /etc/systemd/system/fanout.service
-systemctl daemon-reload
-systemctl enable --now fanout
+svc_install
+svc_enable_start
 
 echo "[6/6] 就绪"
 sleep 3
-systemctl is-active --quiet fanout && echo "      服务运行中" || {
-  echo "      服务启动失败，看 journalctl -u fanout -n 30" >&2
+svc_is_active && echo "      服务运行中（${INIT_SYS}）" || {
+  echo "      服务启动失败，看 $(svc_logs_hint)" >&2
   exit 1
 }
 

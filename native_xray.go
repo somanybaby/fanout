@@ -73,10 +73,7 @@ func buildXrayConfig(inbounds []*nativeInbound, tunnels []*Tunnel) map[string]an
 			"tag":      tunnelTag(t),
 			"protocol": "socks",
 			"settings": map[string]any{
-				"servers": []any{map[string]any{
-					"address": "127.0.0.1",
-					"port":    t.Port,
-				}},
+				"servers": []any{socksServerJSON(t)},
 			},
 		})
 	}

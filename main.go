@@ -61,6 +61,9 @@ func main() {
 		log.Printf("恢复上次状态失败: %v", err)
 	} else if n > 0 {
 		log.Printf("正在恢复上次的 %d 条隧道", n)
+		// 3x-ui 模式重启不会自动重写面板出站，旧版本升上来时面板里的 socks
+		// 出站没有认证字段，端口一旦要认证就连不上，这里恢复后对账一次
+		go mgr.ReconcileOutbounds()
 	}
 
 	go mgr.WatchHealth()
@@ -82,6 +85,7 @@ func main() {
 	mux.HandleFunc("/api/start", apiStart(mgr))
 	mux.HandleFunc("/api/stop", apiStop(mgr))
 	mux.HandleFunc("/api/swap", apiSwap(mgr))
+	mux.HandleFunc("/api/cred", apiCred(mgr))
 	mux.HandleFunc("/api/refresh", apiRefresh(mgr))
 	mux.HandleFunc("/api/regions", apiRegions(mgr))
 	mux.HandleFunc("/api/provision", apiProvision(mgr))
@@ -219,6 +223,30 @@ func apiSwap(m *Manager) http.HandlerFunc {
 func apiRegions(m *Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, m.Regions())
+	}
+}
+
+// apiCred 改一个出口的 SOCKS5 用户名口令。两个参数都留空表示随机重置。
+func apiCred(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		slot, err := strconv.Atoi(q.Get("slot"))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "slot 参数无效"})
+			return
+		}
+		cred, err := m.SetCred(slot, SocksCred{
+			User: strings.TrimSpace(q.Get("user")),
+			Pass: strings.TrimSpace(q.Get("pass")),
+		})
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{
+			"user": cred.User,
+			"pass": cred.Pass,
+		})
 	}
 }
 

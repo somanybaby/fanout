@@ -18,16 +18,19 @@ type ExitInbound struct {
 // Exit 是界面上的一行：一条隧道加上挂在它出口的所有入站。
 // 用户脑子里的单位是"一个出口"，不是"一条隧道"和"一个入站"两样东西。
 type Exit struct {
-	Slot     int           `json:"slot"`
-	Port     int           `json:"port"` // SOCKS5 端口
-	Host     string        `json:"host"`
-	Region   string        `json:"region"`
-	Country  string        `json:"country"`
-	ExitIP   string        `json:"exit_ip"`
-	Status   string        `json:"status"`
-	Err      string        `json:"err,omitempty"`
-	Since    time.Time     `json:"since"`
-	Inbounds []ExitInbound `json:"inbounds"`
+	Slot    int       `json:"slot"`
+	Port    int       `json:"port"` // SOCKS5 端口
+	Host    string    `json:"host"`
+	Region  string    `json:"region"`
+	Country string    `json:"country"`
+	ExitIP  string    `json:"exit_ip"`
+	Status  string    `json:"status"`
+	Err     string    `json:"err,omitempty"`
+	Since   time.Time `json:"since"`
+	// SOCKS5 凭据：界面要能看、能复制、能改
+	SocksUser string        `json:"socks_user"`
+	SocksPass string        `json:"socks_pass"`
+	Inbounds  []ExitInbound `json:"inbounds"`
 }
 
 // ExitsView 是主界面需要的全部数据。
@@ -100,10 +103,12 @@ func (m *Manager) ExitsOf() ExitsView {
 	byHost := map[string]int{}
 	for i, t := range tunnels {
 		byHost[sanitizeTag(t.Node.HostName)] = i
+		cred := t.credential()
 		view.Exits = append(view.Exits, Exit{
 			Slot: t.Slot, Port: t.Port, Host: t.Node.HostName,
 			Region: t.Node.CountryCode, Country: t.Node.Country,
 			ExitIP: t.ExitIP, Status: t.Status, Err: t.Err, Since: t.Since,
+			SocksUser: cred.User, SocksPass: cred.Pass,
 		})
 	}
 

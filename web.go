@@ -71,6 +71,10 @@ main{padding:14px 16px 40px;max-width:1180px;margin:0 auto}
 .orphan .top{display:flex;align-items:center;gap:10px;margin-bottom:8px}
 .orphan .top h3{font-size:12px;margin:0;font-weight:600;color:var(--dim)}
 .socks{color:var(--dim);font-size:12px;font-variant-numeric:tabular-nums}
+.socks button{background:transparent;border-color:transparent;color:var(--dim);
+  font-size:12px;padding:2px 6px;font-variant-numeric:tabular-nums}
+.socks button:hover:not(:disabled){color:var(--accent);border-color:var(--line)}
+.socks button .lock{width:11px;height:11px;stroke-width:2}
 .acts{display:flex;gap:2px;justify-self:end}
 .errline{padding:0 12px 9px 38px;color:var(--bad);font-size:11px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -149,6 +153,8 @@ label.chk input{margin:0}
 .ef{display:block}
 .ef>span{display:block;color:var(--dim);font-size:11px;margin-bottom:4px}
 .ef input{width:150px}
+.credrow{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.credrow .ef input{width:190px}
 .chead{display:flex;align-items:center;gap:10px;margin:14px 0 8px;
   padding-top:12px;border-top:1px solid var(--line)}
 .chead h3{font-size:12px;margin:0;font-weight:600;color:var(--dim)}
@@ -352,6 +358,42 @@ textarea:focus{outline:none;border-color:var(--accent)}
   </div>
 </div>
 
+<div class="modal" id="credbox">
+  <div class="sheet">
+    <div class="head">
+      <h2>SOCKS5 访问凭据</h2>
+      <span class="count" id="crtitle"></span>
+      <span class="spacer"></span>
+      <button class="icon" data-close="credbox" title="关闭">
+        <svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+    <div class="body">
+      <div class="share" id="crurl"></div>
+      <div class="credrow">
+        <label class="ef"><span>用户名</span>
+          <input id="cruser" type="text" spellcheck="false"></label>
+        <label class="ef"><span>口令</span>
+          <input id="crpass" type="text" spellcheck="false"></label>
+        <button id="crrand" title="随机生成一套">
+          <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+          随机
+        </button>
+      </div>
+      <div class="hint">改完立即生效，已连上的会话不断；用旧凭据的客户端要改配置。</div>
+    </div>
+    <div class="foot">
+      <button id="crcopy">
+        <svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        复制地址
+      </button>
+      <span class="spacer"></span>
+      <button data-close="credbox">取消</button>
+      <button class="primary" id="crsave">保存</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="export">
   <div class="sheet">
     <div class="head">
@@ -384,7 +426,8 @@ const ICON = {
   wait:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg>',
   plus:'<svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>',
   trash:'<svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
-  x:'<svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>'
+  x:'<svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
+  lock:'<svg viewBox="0 0 24 24" class="lock"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>'
 };
 
 // 界面挂在随机前缀下，请求一律走相对路径
@@ -473,7 +516,8 @@ function renderExits(){
       +   '<span class="ip">' + esc(label) + '</span>'
       +   '<span class="meta">' + place + ' · ' + esc(e.host) + '</span>'
       +   '<span class="chips">' + chips + '</span>'
-      +   '<span class="socks">SOCKS5 :' + e.port + '</span>'
+      +   '<span class="socks"><button data-cred="' + e.slot + '" title="SOCKS5 访问凭据">'
+      +     ICON.lock + ':' + e.port + '</button></span>'
       +   '<span class="acts">'
       +     '<button class="icon" data-swap="' + e.slot + '" title="换一个节点">' + ICON.redo + '</button>'
       +     '<button class="icon" data-stop="' + e.slot + '" title="停止这个出口">' + ICON.stop + '</button>'
@@ -744,6 +788,8 @@ document.addEventListener('click', async e => {
     poll();
     return;
   }
+  const cred = e.target.closest('[data-cred]');
+  if(cred){ openCred(Number(cred.dataset.cred)); return; }
   const job = e.target.closest('[data-job]');
   if(job){
     try{ await api('/api/jobs/dismiss?id=' + job.dataset.job, {method:'POST'}); }catch(err){}
@@ -929,6 +975,69 @@ document.addEventListener('click', e => {
   const c = e.target.closest('[data-copy]');
   if(c) copy(c.dataset.copy);
 });
+
+// ---- SOCKS5 凭据 ----
+let curCred = null;
+
+function socksURL(host, port, user, pass){
+  if(!user) return 'socks5://' + host + ':' + port;
+  return 'socks5://' + user + ':' + pass + '@' + host + ':' + port;
+}
+
+// 出口的公网地址：优先出口 IP 拿不到就退回主机名，最后退回当前访问的域名
+function credHost(e){
+  return e.exit_ip || location.hostname || e.host;
+}
+
+function openCred(slot){
+  const e = view.exits.find(x => x.slot === slot);
+  if(!e){ toast('这个出口不在了', true); return; }
+  curCred = {slot: slot, port: e.port, host: credHost(e)};
+  $('#crtitle').textContent = e.region + ' · :' + e.port;
+  $('#cruser').value = e.socks_user || '';
+  $('#crpass').value = e.socks_pass || '';
+  refreshCredURL();
+  openModal('credbox');
+}
+
+function refreshCredURL(){
+  if(!curCred) return;
+  $('#crurl').textContent = socksURL(curCred.host, curCred.port,
+    $('#cruser').value.trim(), $('#crpass').value.trim());
+}
+$('#cruser').oninput = refreshCredURL;
+$('#crpass').oninput = refreshCredURL;
+
+$('#crrand').onclick = () => {
+  // 客户端和服务端都要能识别，只用无歧义、无需转义的字符
+  const abc = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const gen = n => Array.from(crypto.getRandomValues(new Uint8Array(n)))
+    .map(v => abc[v % abc.length]).join('');
+  $('#cruser').value = 'fo' + gen(6);
+  $('#crpass').value = gen(14);
+  refreshCredURL();
+};
+
+$('#crcopy').onclick = () => { copy($('#crurl').textContent); };
+
+$('#crsave').onclick = async e => {
+  if(!curCred) return;
+  const btn = e.target; btn.disabled = true;
+  const q = new URLSearchParams({
+    slot: curCred.slot,
+    user: $('#cruser').value.trim(),
+    pass: $('#crpass').value.trim(),
+  });
+  try{
+    const r = await api('/api/cred?' + q, {method:'POST'});
+    $('#cruser').value = r.user;
+    $('#crpass').value = r.pass;
+    refreshCredURL();
+    toast('已保存，立即生效');
+    poll();
+  }catch(err){ toast(err.message, true); }
+  btn.disabled = false;
+};
 
 // ---- 导出 ----
 $('#exportAll').onclick = async () => {

@@ -11,15 +11,25 @@ import (
 	"time"
 )
 
+// SocksCred 是一条隧道的 SOCKS5 访问凭据。
+//
+// 每条隧道一套独立凭据：泄露一条不会连累其他出口，
+// 换节点时也能只重置这一条而不影响已分发的其他配置。
+type SocksCred struct {
+	User string `json:"user"`
+	Pass string `json:"pass"`
+}
+
 // Tunnel 是一条运行中的隧道：一个 netns + 一个 openvpn 进程 + 一个本地 SOCKS5 端口。
 type Tunnel struct {
-	Slot     int    `json:"slot"`
-	Port     int    `json:"port"`
-	Node     Node   `json:"node"`
-	Status   string `json:"status"` // starting | up | failed | stopped
-	ExitIP   string `json:"exit_ip"`
-	Err      string `json:"err,omitempty"`
-	Since    time.Time `json:"since"`
+	Slot   int       `json:"slot"`
+	Port   int       `json:"port"`
+	Node   Node      `json:"node"`
+	Status string    `json:"status"` // starting | up | failed | stopped
+	ExitIP string    `json:"exit_ip"`
+	Err    string    `json:"err,omitempty"`
+	Since  time.Time `json:"since"`
+	Cred   SocksCred `json:"cred"`
 
 	ns       string
 	listener net.Listener
@@ -207,10 +217,27 @@ func (t *Tunnel) serve() error {
 			if err != nil {
 				return
 			}
-			go serveSocks(conn, dial)
+			// 每次连接现取凭据：改口令后不必重建监听，新连接立刻按新凭据校验
+			cred := t.credential()
+			go serveSocks(conn, &cred, dial)
 		}
 	}()
 	return nil
+}
+
+// credential 取一份凭据副本，避免读写并发。
+func (t *Tunnel) credential() SocksCred {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.Cred
+}
+
+// setCredential 换掉这条隧道的 SOCKS5 凭据。已建立的连接不受影响，
+// 新连接立即按新凭据校验。
+func (t *Tunnel) setCredential(c SocksCred) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.Cred = c
 }
 
 // probeExitIP 通过隧道查询出口 IP，用于确认这条隧道确实换了 IP。

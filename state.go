@@ -16,6 +16,9 @@ type persistedTunnel struct {
 	CountryCode string `json:"country_code"`
 	Country     string `json:"country"`
 	Config      string `json:"config"`
+	// SOCKS5 凭据要存盘：用户已经把它分发给客户端了，重启后变掉等于全断
+	SocksUser string `json:"socks_user,omitempty"`
+	SocksPass string `json:"socks_pass,omitempty"`
 }
 
 type persistedState struct {
@@ -40,6 +43,8 @@ func (m *Manager) saveState() error {
 			CountryCode: t.Node.CountryCode,
 			Country:     t.Node.Country,
 			Config:      t.Node.Config,
+			SocksUser:   t.Cred.User,
+			SocksPass:   t.Cred.Pass,
 		})
 	}
 
@@ -87,11 +92,21 @@ func (m *Manager) restoreState() (int, error) {
 			}
 		}
 		node.Config = p.Config
+		// 从旧版本升上来的状态文件没有凭据字段，补一套新的
+		cred := SocksCred{User: p.SocksUser, Pass: p.SocksPass}
+		if cred.User == "" || cred.Pass == "" {
+			gen, err := newSocksCred()
+			if err != nil {
+				return 0, fmt.Errorf("生成 SOCKS5 凭据失败: %w", err)
+			}
+			cred = gen
+		}
 		t := &Tunnel{
 			Slot:   p.Slot,
 			Port:   p.Port,
 			Node:   node,
 			Status: "starting",
+			Cred:   cred,
 		}
 		m.mu.Lock()
 		m.tunnels[p.Slot] = t

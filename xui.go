@@ -588,10 +588,7 @@ func (x *XUI) syncOutbounds(setting map[string]any, tunnels []*Tunnel) {
 			"tag":      tunnelTag(t),
 			"protocol": "socks",
 			"settings": map[string]any{
-				"servers": []any{map[string]any{
-					"address": "127.0.0.1",
-					"port":    t.Port,
-				}},
+				"servers": []any{socksServerJSON(t)},
 			},
 		})
 	}

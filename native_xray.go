@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,24 @@ func xrayCandidates(workDir string) []string {
 		filepath.Join(workDir, "bin", "xray"),
 		"/usr/local/bin/xray",
 		"/usr/bin/xray",
+		// 接管 3x-ui 时机器上通常只有面板自带的这份，文件名带平台后缀
+		fmt.Sprintf("/usr/local/x-ui/bin/xray-%s-%s", runtime.GOOS, xuiArchSuffix()),
+	}
+}
+
+// xuiArchSuffix 把 Go 的 GOARCH 映射成 3x-ui 给 xray 二进制起名用的后缀。
+func xuiArchSuffix() string {
+	switch runtime.GOARCH {
+	case "amd64":
+		return "amd64"
+	case "arm64":
+		return "arm64"
+	case "arm":
+		return "arm32"
+	case "s390x":
+		return "s390x"
+	default:
+		return runtime.GOARCH
 	}
 }
 

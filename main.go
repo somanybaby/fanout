@@ -311,8 +311,8 @@ func apiXUIStatus(w http.ResponseWriter, r *http.Request) {
 		"available": true,
 		"kind":      p.Kind(),
 		"describe":  p.Describe(),
-		// 自建模式下界面要能自己建入站；3x-ui 模式沿用面板里已有的入站做模板
-		"can_create": p.Kind() == "native",
+		// 两种后端都能建入站：自建模式写自己的库，3x-ui 走面板的 inbounds/add API
+		"can_create": true,
 	}
 	if x, ok := p.(*XUI); ok {
 		resp["port"] = x.Port
@@ -520,8 +520,8 @@ func apiXUIDelete(m *Manager) http.HandlerFunc {
 	}
 }
 
-// apiInboundCreate 新建一个入站。只有自建模式提供这个能力：
-// 装了 3x-ui 时入站应当在面板里建，fanout 不去插手它的数据。
+// apiInboundCreate 新建一个入站。两种后端都支持：自建模式写自己的库，
+// 接管 3x-ui 时走面板的 inbounds/add API。
 // apiInboundUpdate 改入站的端口、备注与启停。两种后端都支持。
 func apiInboundUpdate(m *Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -615,17 +615,10 @@ func apiInboundCreate(m *Manager) http.HandlerFunc {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 			return
 		}
-		native, ok := p.(*Native)
-		if !ok {
-			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": "当前接管的是 3x-ui，请在面板里新建入站",
-			})
-			return
-		}
 
 		q := r.URL.Query()
 		port, _ := strconv.Atoi(q.Get("port"))
-		ib, err := native.CreateInbound(NewInboundSpec{
+		ib, err := p.CreateInbound(NewInboundSpec{
 			Protocol: q.Get("protocol"),
 			Network:  q.Get("network"),
 			Port:     port,
@@ -654,8 +647,8 @@ func apiInboundCreate(m *Manager) http.HandlerFunc {
 			"port":     ib.Port,
 			"protocol": ib.Protocol,
 			"remark":   ib.Remark,
-			"network":  ib.netOrTCP(),
-			"security": ib.securityOrNone(),
+			"network":  ib.Network,
+			"security": ib.Security,
 		})
 	}
 }

@@ -27,6 +27,10 @@ type Panel interface {
 	CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) ([]int, error)
 	DeleteInbounds(ids []int, tunnels []*Tunnel) error
 
+	// CreateInbound 新建一个入站。自建模式写自己的库并重建 Xray 配置，
+	// 接管 3x-ui 时走面板的 inbounds/add API，让面板照常管这条入站。
+	CreateInbound(spec NewInboundSpec, tunnels []*Tunnel) (*CreatedInbound, error)
+
 	// UpdateInbound 改端口、备注与启停。只有非零/非 nil 的字段会被写入。
 	UpdateInbound(id int, patch InboundPatch, tunnels []*Tunnel) error
 
@@ -54,6 +58,16 @@ type InboundPatch struct {
 	Port   *int
 	Remark *string
 	Enable *bool
+}
+
+// CreatedInbound 是新建入站后回给界面的摘要。
+type CreatedInbound struct {
+	ID       int    `json:"id"`
+	Port     int    `json:"port"`
+	Protocol string `json:"protocol"`
+	Remark   string `json:"remark"`
+	Network  string `json:"network"`
+	Security string `json:"security"`
 }
 
 // closePanel 在进程退出时释放后端资源。

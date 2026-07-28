@@ -37,6 +37,7 @@ button:disabled{opacity:.45;cursor:default}
 button.primary{background:var(--accent);border-color:var(--accent);color:#0b0e12;font-weight:600}
 button.icon{padding:3px 6px;background:transparent;border-color:transparent;color:var(--dim)}
 button.icon:hover:not(:disabled){color:var(--accent);border-color:var(--line)}
+button.icon.danger:hover:not(:disabled){color:var(--bad);border-color:rgba(194,84,80,.35)}
 svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.8;
   stroke-linecap:round;stroke-linejoin:round;flex:none}
 main{padding:14px 16px 40px;max-width:1180px;margin:0 auto}
@@ -208,7 +209,7 @@ textarea:focus{outline:none;border-color:var(--accent)}
       <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
       全部停止
     </button>
-    <button id="newnode" hidden title="新建一个节点（协议与端口）">
+    <button id="newnode" title="新建一个节点（协议与端口）">
       <svg viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/></svg>
       新建节点
     </button>
@@ -350,6 +351,9 @@ textarea:focus{outline:none;border-color:var(--accent)}
     <div class="head">
       <h2 id="dtitle">节点</h2>
       <span class="spacer"></span>
+      <button class="icon danger" id="ddel" title="删除这个入站">
+        <svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+      </button>
       <button class="icon" data-close="detail" title="关闭">
         <svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
       </button>
@@ -487,8 +491,6 @@ function renderExits(){
   $('#ecount').textContent = n ? n + ' 个' : '';
   $('#exportAll').disabled = !view.exits.some(e => e.inbounds && e.inbounds.length);
   $('#stopall').disabled = !n;
-  // 接管 3x-ui 时入站归面板管，只有自建模式才由 fanout 建节点
-  $('#newnode').hidden = !isNative();
 
   if(!n){
     list.innerHTML = '<div class="empty">还没有出口'
@@ -547,6 +549,9 @@ function renderOrphans(){
         + (hasUp
             ? '<select class="obind" data-tag="' + esc(i.tag) + '">' + exitOptions('') + '</select>'
             : '<span class="dim">先开一个出口</span>')
+        + '<button class="icon danger" data-delone="' + i.id + '" data-name="'
+        +   esc((i.remark || i.protocol) + ' :' + i.port) + '" title="删除这个入站">'
+        +   ICON.trash + '</button>'
         + '</div>').join('')
     + '</div>';
 }
@@ -645,9 +650,7 @@ async function loadWizard(){
     inbounds = free.concat(bound);
     if(!inbounds.length){
       sel.innerHTML = '<option value="0">还没有节点</option>';
-      $('#tplhint').textContent = isNative()
-        ? '先用上面的「新建节点」建一个，之后这里可以按它批量生成'
-        : '先在 3x-ui 建一个入站，之后这里可以按它批量生成';
+      $('#tplhint').textContent = '先用上面的「新建节点」建一个，之后这里可以按它批量生成';
       return;
     }
     const opt = i => '<option value="' + i.id + '">'
@@ -673,7 +676,7 @@ document.addEventListener('click', e => {
   if(rg){ region = rg.dataset.rg; renderRegions(); }
 });
 
-// ---- 新建节点（仅自建模式）----
+// ---- 新建节点 ----
 document.addEventListener('click', e => {
   if(e.target.closest('#newnode') || e.target.closest('#newnode2')){
     $('#nnhint').textContent = '';
@@ -806,6 +809,18 @@ document.addEventListener('click', async e => {
       toast('已清理 ' + list.length + ' 个入站');
     }catch(err){ toast(err.message, true); }
     poll();
+    return;
+  }
+
+  const one = e.target.closest('[data-delone]');
+  if(one){
+    if(!confirm('删除入站 ' + one.dataset.name + '？此操作不可撤销。')) return;
+    one.disabled = true;
+    try{
+      await api('/api/xui/delete?ids=' + one.dataset.delone, {method:'POST'});
+      toast('已删除 ' + one.dataset.name);
+    }catch(err){ toast(err.message, true); }
+    poll();
   }
 });
 
@@ -824,11 +839,14 @@ let curDetail = null;
 // 详情弹窗的重绘要跟轮询解耦：正在编辑时被 poll 刷掉输入会很烦
 async function openDetail(id){
   $('#dbody').innerHTML = '<div class="empty">读取中…</div>';
+  curDetail = null;
+  $('#ddel').disabled = true;
   openModal('detail');
   try{
     const d = await api('/api/xui/detail?id=' + id);
     curDetail = d;
     renderDetail(d);
+    $('#ddel').disabled = false;
   }catch(err){
     $('#dbody').innerHTML = '<div class="empty">读取失败: ' + esc(err.message) + '</div>';
   }
@@ -968,6 +986,22 @@ document.addEventListener('click', async e => {
       toast('已重置');
       await openDetail(curDetail.id);
     }catch(err){ toast(err.message, true); reset.disabled = false; }
+    return;
+  }
+
+  // 详情弹窗里删掉当前这个入站
+  const dd = e.target.closest('#ddel');
+  if(dd && curDetail){
+    const name = (curDetail.remark || curDetail.protocol || '节点') + ' :' + curDetail.port;
+    if(!confirm('删除入站 ' + name + '？它的所有客户端链接都会失效，且不可撤销。')) return;
+    dd.disabled = true;
+    try{
+      await api('/api/xui/delete?ids=' + curDetail.id, {method:'POST'});
+      toast('已删除 ' + name);
+      curDetail = null;
+      closeModal('detail');
+      poll();
+    }catch(err){ toast(err.message, true); dd.disabled = false; }
   }
 });
 

@@ -441,105 +441,48 @@ type NewInboundSpec struct {
 var nativeProtocols = map[string]bool{"vless": true, "vmess": true, "trojan": true}
 
 // CreateInbound 新建一个入站，端口留空时随机分配。
-func (n *Native) CreateInbound(spec NewInboundSpec, tunnels []*Tunnel) (*nativeInbound, error) {
+func (n *Native) CreateInbound(spec NewInboundSpec, tunnels []*Tunnel) (*CreatedInbound, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	proto := strings.ToLower(strings.TrimSpace(spec.Protocol))
-	if proto == "" {
-		proto = "vless"
+	ns, err := normalizeInboundSpec(spec, n.store.usedPorts())
+	if err != nil {
+		return nil, err
 	}
-	if !nativeProtocols[proto] {
-		return nil, fmt.Errorf("不支持的协议 %q", spec.Protocol)
-	}
-	network := strings.ToLower(strings.TrimSpace(spec.Network))
-	if network == "" {
-		network = "tcp"
-	}
-	if !nativeNetworks[network] {
-		return nil, fmt.Errorf("不支持的传输方式 %q", spec.Network)
-	}
-	security := strings.ToLower(strings.TrimSpace(spec.Security))
-	if security == "" {
-		security = "none"
-	}
-	if !nativeSecurities[security] {
-		return nil, fmt.Errorf("不支持的安全层 %q", spec.Security)
-	}
-	// REALITY 靠模仿 TLS 握手工作，套在 ws/grpc 这类已有自己头部的传输上没有意义，
-	// Xray 也不接受这种组合
-	if security == "reality" && network != "tcp" && network != "xhttp" && network != "grpc" {
-		return nil, fmt.Errorf("REALITY 不支持 %s 传输", network)
-	}
-	// VMess 自带加密，但 TLS 在这里是为了流量伪装而不是加密强度，
-	// vmess+ws+tls 是很常见的组合，不该拦。
-
-	used := n.store.usedPorts()
-	port := spec.Port
-	if port == 0 {
-		p, err := freeRandomPort(used)
-		if err != nil {
-			return nil, err
-		}
-		port = p
-	} else if used[port] {
-		return nil, fmt.Errorf("端口 %d 已被别的入站占用", port)
-	}
-
-	path := strings.TrimSpace(spec.Path)
-	if path == "" {
-		switch network {
-		case "ws", "httpupgrade", "xhttp":
-			path = "/" + randomHex(6)
-		case "grpc":
-			path = randomHex(6)
-		}
-	}
-
-	remark := strings.TrimSpace(spec.Remark)
-	if remark == "" {
-		remark = fmt.Sprintf("%s-%d", proto, port)
-	}
+	proto, network, security, port := ns.Protocol, ns.Network, ns.Security, ns.Port
 
 	ib := &nativeInbound{
 		ID:       n.store.NextID,
 		Port:     port,
 		Protocol: proto,
 		Network:  network,
-		Path:     path,
-		Host:     strings.TrimSpace(spec.Host),
+		Path:     ns.Path,
+		Host:     ns.Host,
 		Security: security,
-		Remark:   remark,
+		Remark:   ns.Remark,
 		Enable:   true,
 	}
 
 	switch security {
 	case "tls":
-		conf, err := n.buildTLS(spec)
+		conf, err := buildTLS(n.dir, spec)
 		if err != nil {
 			return nil, err
 		}
 		ib.TLS = conf
 	case "reality":
-		conf, err := n.buildReality(spec)
+		conf, err := buildReality(n.proc.bin, spec)
 		if err != nil {
 			return nil, err
 		}
 		ib.Reality = conf
 	}
 
-	flow := ""
-	if spec.Vision {
-		if !visionCapable(proto, network, security) {
-			return nil, fmt.Errorf("xtls-rprx-vision 只能用于 VLESS + TCP + TLS/REALITY")
-		}
-		flow = "xtls-rprx-vision"
-	}
 	ib.Clients = []nativeClient{{
 		Email:    fmt.Sprintf("%s-%d", proto, port),
 		ID:       newUUID(),
 		Password: randomHex(8),
-		Flow:     flow,
+		Flow:     ns.Flow,
 		Enable:   true,
 	}}
 
@@ -553,7 +496,14 @@ func (n *Native) CreateInbound(spec NewInboundSpec, tunnels []*Tunnel) (*nativeI
 		_ = n.apply(tunnels)
 		return nil, err
 	}
-	return ib, nil
+	return &CreatedInbound{
+		ID:       ib.ID,
+		Port:     ib.Port,
+		Protocol: ib.Protocol,
+		Remark:   ib.Remark,
+		Network:  ib.netOrTCP(),
+		Security: ib.securityOrNone(),
+	}, nil
 }
 
 // cloneRemark 给复制出来的入站起名，与 3x-ui 模式同一套规则。
@@ -632,8 +582,8 @@ func shareLink(ib *nativeInbound, c nativeClient, host string) string {
 	}
 }
 
-// buildTLS 组装 TLS 配置。没给证书路径就生成一张自签的。
-func (n *Native) buildTLS(spec NewInboundSpec) (*tlsConfig, error) {
+// buildTLS 组装 TLS 配置。没给证书路径就生成一张自签的，落在 dir/certs 下。
+func buildTLS(dir string, spec NewInboundSpec) (*tlsConfig, error) {
 	name := strings.TrimSpace(spec.ServerName)
 	if name == "" {
 		name = "localhost"
@@ -657,7 +607,7 @@ func (n *Native) buildTLS(spec NewInboundSpec) (*tlsConfig, error) {
 	}
 
 	// 自签证书验不过 CA，靠链接里的证书指纹让客户端固定信任
-	c, k, err := selfSignedCert(n.dir, name)
+	c, k, err := selfSignedCert(dir, name)
 	if err != nil {
 		return nil, err
 	}
@@ -672,7 +622,8 @@ func (n *Native) buildTLS(spec NewInboundSpec) (*tlsConfig, error) {
 }
 
 // buildReality 组装 REALITY 配置，密钥和 shortId 都自动生成。
-func (n *Native) buildReality(spec NewInboundSpec) (*realityConfig, error) {
+// xrayBin 用来跑 `xray x25519` 生成密钥对。
+func buildReality(xrayBin string, spec NewInboundSpec) (*realityConfig, error) {
 	dest := strings.TrimSpace(spec.Dest)
 	if dest == "" {
 		// REALITY 要跟 dest 完成一次真实 TLS1.3 握手，dest 不稳会让所有连接
@@ -694,7 +645,7 @@ func (n *Native) buildReality(spec NewInboundSpec) (*realityConfig, error) {
 		names = []string{strings.SplitN(dest, ":", 2)[0]}
 	}
 
-	priv, pub, err := realityKeys(n.proc.bin)
+	priv, pub, err := realityKeys(xrayBin)
 	if err != nil {
 		return nil, err
 	}

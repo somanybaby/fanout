@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -27,6 +28,8 @@ type XUI struct {
 	Scheme   string `json:"scheme"`
 	token    string
 	client   *http.Client
+	// workDir 是 fanout 的工作目录，新建 TLS 入站时自签证书落在这里。
+	workDir string
 }
 
 // base 返回访问面板用的前缀。
@@ -60,18 +63,38 @@ var (
 const xuiTokenFile = "xui-token"
 
 var (
-	reXUIPort = regexp.MustCompile(`(?m)^port:\s*(\d+)`)
-	reXUIBase = regexp.MustCompile(`(?m)^webBasePath:\s*(\S+)`)
+	// 值一律限定在本行之内取：`\s*` 会跨过换行，字段为空时会把下一行的内容当成值。
+	reXUIPort = regexp.MustCompile(`(?m)^port:[^\S\r\n]*(\d+)`)
+	reXUIBase = regexp.MustCompile(`(?m)^webBasePath:[^\S\r\n]*(\S+)`)
 	// 只认 "apiToken: xxx" 这一行，避免匹配到提示文字里的长单词
-	reXUIToken = regexp.MustCompile(`(?m)^apiToken:\s*([A-Za-z0-9]+)`)
-	// 面板开了 TLS 时 setting -show 会打印 "Panel is secure with SSL"
-	reXUISSL = regexp.MustCompile(`(?i)panel is secure with ssl`)
+	reXUIToken = regexp.MustCompile(`(?m)^apiToken:[^\S\r\n]*([A-Za-z0-9]+)`)
+	// 面板开了 TLS 时 setting -show 打印 "Panel is secure with SSL"，
+	// 没开则打印 "Warning: Panel is not secure with SSL"——后者包含前者，必须先排除。
+	reXUISSLOff = regexp.MustCompile(`(?i)panel is not secure with ssl`)
+	reXUISSLOn  = regexp.MustCompile(`(?i)panel is secure with ssl`)
 	// 兜底：证书路径非空也说明启用了 TLS
-	reXUICert = regexp.MustCompile(`(?m)^cert:\s*\S+`)
+	reXUICert = regexp.MustCompile(`(?m)^cert:[^\S\r\n]*(\S+)`)
 	// x-ui 菜单第 11 项打印的 Access URL，绑了域名时给的是域名而不是 IP
 	reXUIAccessURL = regexp.MustCompile(`Access URL:\s*(https?)://([^:/\s]+):(\d+)(\S*)`)
 	reANSI         = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 )
+
+// xuiSSLFromSettings 判断 `x-ui setting -show` 的输出说的是"开了 SSL"还是"没开"。
+// 第三个返回值表示这段输出里到底有没有提到 SSL，没提到时调用方才去看证书。
+func xuiSSLFromSettings(text string) (on, stated bool) {
+	if reXUISSLOff.MatchString(text) {
+		return false, true
+	}
+	if reXUISSLOn.MatchString(text) {
+		return true, true
+	}
+	return false, false
+}
+
+// xuiCertConfigured 判断 `x-ui setting -getCert` 的输出里证书路径是否非空。
+func xuiCertConfigured(text string) bool {
+	return reXUICert.MatchString(text)
+}
 
 // panelAccess 从 `x-ui` 的「View Current Settings」里取面板地址。
 //
@@ -115,10 +138,13 @@ func DetectXUI(workDir string) (*XUI, error) {
 	// 优先信 x-ui 自己给出的地址（可能是域名）
 	if sc, h, ok := panelAccess(); ok {
 		scheme, host = sc, h
-	} else if reXUISSL.MatchString(text) {
-		scheme = "https"
+	} else if on, stated := xuiSSLFromSettings(text); stated {
+		// 面板自己说了开没开，直接采信，不必再查证书
+		if on {
+			scheme = "https"
+		}
 	} else if certOut, err := exec.Command(xuiBinary, "setting", "-getCert").Output(); err == nil {
-		if reXUICert.MatchString(string(certOut)) {
+		if xuiCertConfigured(string(certOut)) {
 			scheme = "https"
 		}
 	}
@@ -139,6 +165,7 @@ func DetectXUI(workDir string) (*XUI, error) {
 			Scheme:   scheme,
 			token:    token,
 			client:   localClient(),
+			workDir:  workDir,
 		}
 	}
 
@@ -1020,13 +1047,55 @@ func (x *XUI) InboundDetail(id int, publicHost string) (*InboundDetail, error) {
 
 		if links, err := x.clientLinks(info.Email); err == nil {
 			for _, l := range links {
-				if strings.Contains(l, fmt.Sprintf(":%d?", port)) || strings.Contains(l, fmt.Sprintf(":%d#", port)) {
-					detail.Links = append(detail.Links, strings.Replace(l, "@localhost:", "@"+publicHost+":", 1))
+				if fixed, ok := linkForPort(l, port, publicHost); ok {
+					detail.Links = append(detail.Links, fixed)
 				}
 			}
 		}
 	}
 	return detail, nil
+}
+
+// linkForPort 从一批分享链接里挑出属于指定端口的那条，并把面板写的
+// localhost 换成实际可连的地址。
+//
+// vmess 的链接是 base64 编码的 JSON（vmess://<base64>），端口和地址都在里面，
+// 按 URI 形式匹配 ":端口?" 一条也筛不出来，得先解码。
+func linkForPort(link string, port int, publicHost string) (string, bool) {
+	if strings.HasPrefix(link, "vmess://") {
+		return fixVMessLink(link, port, publicHost)
+	}
+	if strings.Contains(link, fmt.Sprintf(":%d?", port)) || strings.Contains(link, fmt.Sprintf(":%d#", port)) {
+		return strings.Replace(link, "@localhost:", "@"+publicHost+":", 1), true
+	}
+	return "", false
+}
+
+// fixVMessLink 解码 vmess 链接，确认端口后把 add 换成实际地址再编码回去。
+// 解不开就按原样放行：宁可给一条地址还是 localhost 的链接，也别整条丢掉。
+func fixVMessLink(link string, port int, publicHost string) (string, bool) {
+	payload := strings.TrimPrefix(link, "vmess://")
+	blob, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		// 有的面板版本用 URI 形式的 vmess，退回通用匹配
+		return "", strings.Contains(link, fmt.Sprintf(":%d?", port)) ||
+			strings.Contains(link, fmt.Sprintf(":%d#", port))
+	}
+	var conf map[string]any
+	if err := json.Unmarshal(blob, &conf); err != nil {
+		return "", false
+	}
+	if int(toFloat(conf["port"])) != port {
+		return "", false
+	}
+	if fmt.Sprint(orEmpty(conf["add"])) == "localhost" {
+		conf["add"] = publicHost
+	}
+	fixed, err := json.Marshal(conf)
+	if err != nil {
+		return link, true
+	}
+	return "vmess://" + base64.StdEncoding.EncodeToString(fixed), true
 }
 
 // clientLinks 取某个客户端在所有入站上的分享链接。
@@ -1479,4 +1548,111 @@ func xuiRunning() bool {
 		return true
 	}
 	return false
+}
+
+// CreateInbound 通过面板的 inbounds/add API 新建一个入站。
+//
+// 走 API 而不是直接写库：面板会自己维护 tag、客户端关联和分享链接，
+// fanout 插手它的 sqlite 只会两边打架。载荷字段照面板自己生成的入站抄，
+// settings/streamSettings/sniffing 要编码成字符串，这是面板 API 的要求。
+func (x *XUI) CreateInbound(spec NewInboundSpec, tunnels []*Tunnel) (*CreatedInbound, error) {
+	used, err := x.usedPorts()
+	if err != nil {
+		return nil, err
+	}
+	ns, err := normalizeInboundSpec(spec, used)
+	if err != nil {
+		return nil, err
+	}
+
+	// 借用自建模式那套入站描述来生成 streamSettings：TLS 自签证书、
+	// REALITY 密钥的生成逻辑两种后端完全一样，没必要写第二份。
+	ib := &nativeInbound{
+		Port:     ns.Port,
+		Protocol: ns.Protocol,
+		Network:  ns.Network,
+		Path:     ns.Path,
+		Host:     ns.Host,
+		Security: ns.Security,
+		Remark:   ns.Remark,
+		Enable:   true,
+	}
+	switch ns.Security {
+	case "tls":
+		conf, err := buildTLS(x.workDir, spec)
+		if err != nil {
+			return nil, err
+		}
+		ib.TLS = conf
+	case "reality":
+		bin, err := findXray(x.workDir)
+		if err != nil {
+			return nil, fmt.Errorf("REALITY 需要 xray 生成密钥: %w", err)
+		}
+		conf, err := buildReality(bin, spec)
+		if err != nil {
+			return nil, err
+		}
+		ib.Reality = conf
+	}
+
+	client := newClientEntry(ns.Protocol, fmt.Sprintf("%s-%d", ns.Protocol, ns.Port))
+	if ns.Protocol == "vless" {
+		client["flow"] = ns.Flow
+	}
+	settings := map[string]any{
+		"clients":   []any{client},
+		"fallbacks": []any{},
+	}
+	if ns.Protocol == "vless" {
+		settings["decryption"] = "none"
+	}
+
+	payload := map[string]any{
+		"enable":         true,
+		"remark":         ns.Remark,
+		"listen":         "",
+		"port":           ns.Port,
+		"protocol":       ns.Protocol,
+		"expiryTime":     0,
+		"total":          0,
+		"settings":       mustJSON(settings),
+		"streamSettings": mustJSON(xuiStreamSettings(ib)),
+		"sniffing":       mustJSON(map[string]any{"enabled": true, "destOverride": []any{"http", "tls"}}),
+		"allocate":       mustJSON(map[string]any{}),
+	}
+
+	id, err := x.addInbound(payload)
+	if err != nil {
+		return nil, fmt.Errorf("面板新建入站失败: %w", err)
+	}
+	return &CreatedInbound{
+		ID:       id,
+		Port:     ns.Port,
+		Protocol: ns.Protocol,
+		Remark:   ns.Remark,
+		Network:  ns.Network,
+		Security: ns.Security,
+	}, nil
+}
+
+// xuiStreamSettings 在自建模式的 streamSettings 基础上补面板要的字段。
+//
+// 面板生成分享链接时要读 realitySettings.settings 里的 publicKey / fingerprint，
+// Xray 自己不用这些，但缺了面板给出的链接客户端连不上。
+func xuiStreamSettings(ib *nativeInbound) map[string]any {
+	stream := streamSettingsJSON(ib)
+	if ib.securityOrNone() == "reality" && ib.Reality != nil {
+		r, _ := stream["realitySettings"].(map[string]any)
+		if r != nil {
+			r["show"] = false
+			r["xver"] = 0
+			r["settings"] = map[string]any{
+				"publicKey":   ib.Reality.PublicKey,
+				"fingerprint": ib.Reality.Fingerprint,
+				"spiderX":     "/",
+			}
+		}
+	}
+	return stream
 }

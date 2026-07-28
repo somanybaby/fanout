@@ -984,9 +984,11 @@ function socksURL(host, port, user, pass){
   return 'socks5://' + user + ':' + pass + '@' + host + ':' + port;
 }
 
-// 出口的公网地址：优先出口 IP 拿不到就退回主机名，最后退回当前访问的域名
+// SOCKS5 端口监听在本机（跑 fanout 的这台服务器）上，客户端要连的是
+// 访问面板用的这个地址，流量再从出口 IP 出去。出口 IP 是"出去以后"的地址，
+// 不能拿来当连接地址。
 function credHost(e){
-  return e.exit_ip || location.hostname || e.host;
+  return location.hostname || e.host;
 }
 
 function openCred(slot){

@@ -140,6 +140,8 @@ select:focus,input[type=search]:focus,input[type=text]:focus{outline:none;border
   color:var(--text);padding:5px 0;font-variant-numeric:tabular-nums}
 .stepper input:focus{outline:none}
 .hint{color:var(--dim);font-size:11px;margin-top:6px}
+.setrow{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px}
+.setrow input,.setrow select{width:100%}
 label.chk{display:flex;align-items:center;gap:7px;color:var(--text);font-size:12px;
   cursor:pointer;margin:0}
 label.chk input{margin:0}
@@ -429,13 +431,24 @@ textarea:focus{outline:none;border-color:var(--accent)}
       </button>
     </div>
     <div class="body">
-      <label class="f"><span>母机公网 IPv4</span>
-        <input id="setIP" type="text" spellcheck="false" placeholder="留空自动探测"></label>
-      <div class="hint" id="setIPHint">分享链接和 SOCKS5 地址都用这个地址。留空就自动探测母机公网 IP。</div>
-      <label class="chk" style="margin-top:16px">
-        <input type="checkbox" id="setAuto"> 出口掉线自动换节点重连
-      </label>
-      <div class="hint">关掉后，掉线的出口会停在原地不动，需要你手动换节点。</div>
+      <label class="f"><span>访问口令</span>
+        <input id="setPw" type="password" spellcheck="false" autocomplete="new-password" placeholder="留空则不改"></label>
+      <div class="hint">改完只影响新登录，当前这个浏览器不会被踢下线。</div>
+
+      <label class="f" style="margin-top:16px"><span>访问路径</span>
+        <input id="setPath" type="text" spellcheck="false" placeholder="留空则去掉路径前缀"></label>
+      <div class="hint" id="setPathHint">界面挂在这个路径下，扫端口的探不到。只能用字母数字和 - _。</div>
+
+      <div class="setrow">
+        <label class="f" style="margin:0"><span>监听端口</span>
+          <input id="setPort" type="text" inputmode="numeric" spellcheck="false"></label>
+        <label class="f" style="margin:0"><span>本地监听地址</span>
+          <select id="setListen">
+            <option value="0.0.0.0">所有网卡（0.0.0.0）</option>
+            <option value="127.0.0.1">仅本机（127.0.0.1）</option>
+          </select></label>
+      </div>
+      <div class="hint bad" id="setPortHint">改端口或监听地址会切换监听，保存后要用新地址重新打开界面。</div>
     </div>
     <div class="foot">
       <span class="spacer"></span>
@@ -1119,34 +1132,66 @@ $('#exportAll').onclick = async () => {
 };
 $('#copyall').onclick = () => { const v = $('#exbox').value; if(v) copy(v); };
 
-// ---- 设置 ----
+// ---- 设置：改密码 / 改路径 / 改端口 / 改本地监听 ----
+let curSettings = null;
 $('#settingsBtn').onclick = async () => {
-  $('#setIP').value = '';
-  $('#setAuto').checked = true;
-  $('#setIPHint').textContent = '读取中…';
+  $('#setPw').value = '';
+  $('#setPath').value = '';
+  $('#setPathHint').textContent = '读取中…';
   openModal('settings');
   try{
     const s = await api('/api/settings');
-    $('#setIP').value = s.public_ip || '';
-    $('#setAuto').checked = s.auto_reconnect !== false;
-    $('#setIP').placeholder = s.detected_ip ? ('自动探测：' + s.detected_ip) : '留空自动探测';
-    $('#setIPHint').textContent = '分享链接和 SOCKS5 地址都用这个地址。留空就自动探测母机公网 IP。';
-  }catch(err){ $('#setIPHint').textContent = '读取失败: ' + err.message; }
+    curSettings = s;
+    $('#setPath').value = (s.base_path || '').replace(/^\//, '');
+    $('#setPort').value = s.port || '';
+    $('#setListen').value = s.listen_addr || '0.0.0.0';
+    $('#setPathHint').textContent = '界面挂在这个路径下，扫端口的探不到。只能用字母数字和 - _。';
+  }catch(err){ $('#setPathHint').textContent = '读取失败: ' + err.message; }
 };
+
+// 端口/监听地址变了要提示用户之后从新地址进；密码/路径可原地生效
+function nextURL(port, listen, path){
+  const host = (listen && listen !== '0.0.0.0') ? listen : location.hostname;
+  return location.protocol + '//' + host + ':' + port + (path ? '/' + path : '') + '/';
+}
+
 $('#setSave').onclick = async e => {
   e.target.disabled = true;
+  const body = {};
+  const pw = $('#setPw').value.trim();
+  if(pw) body.password = pw;
+  body.base_path = $('#setPath').value.trim();
+  const port = parseInt($('#setPort').value.trim(), 10);
+  if(port) body.port = port;
+  body.listen_addr = $('#setListen').value;
+
+  const portChanged = curSettings && (port !== curSettings.port
+    || body.listen_addr !== (curSettings.listen_addr || '0.0.0.0'));
+
   try{
     await api('/api/settings', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        public_ip: $('#setIP').value.trim(),
-        auto_reconnect: $('#setAuto').checked,
-      }),
+      body: JSON.stringify(body),
     });
-    toast('已保存');
-    closeModal('settings');
-    poll();
+    if(portChanged){
+      const url = nextURL(port, body.listen_addr, body.base_path);
+      $('#setPortHint').innerHTML = '监听已切换，请从新地址打开：<a href="' + esc(url) + '">' + esc(url) + '</a>';
+      toast('监听已切换，用新地址重新打开');
+      // 端口变了当前连接会断，不自动跳转，让用户看清新地址
+    } else {
+      toast('已保存');
+      // 路径可能变了，重新加载到新路径下
+      const np = body.base_path;
+      const cur = (curSettings && curSettings.base_path || '').replace(/^\//, '');
+      if(np !== cur){
+        location.href = location.protocol + '//' + location.host
+          + (np ? '/' + np : '') + '/';
+        return;
+      }
+      closeModal('settings');
+      poll();
+    }
   }catch(err){ toast(err.message, true); }
   e.target.disabled = false;
 };

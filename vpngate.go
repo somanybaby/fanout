@@ -16,14 +16,14 @@ const vpngateAPI = "https://www.vpngate.net/api/iphone/"
 
 // Node 是一个 VPN Gate 节点。
 type Node struct {
-	HostName    string `json:"hostname"`
-	IP          string `json:"ip"`
-	Country     string `json:"country"`
-	CountryCode string `json:"country_code"`
-	Ping        int    `json:"ping"`
+	HostName    string  `json:"hostname"`
+	IP          string  `json:"ip"`
+	Country     string  `json:"country"`
+	CountryCode string  `json:"country_code"`
+	Ping        int     `json:"ping"`
 	SpeedMbps   float64 `json:"speed_mbps"`
-	Sessions    int    `json:"sessions"`
-	Config      string `json:"-"` // 解码后的 .ovpn 内容
+	Sessions    int     `json:"sessions"`
+	Config      string  `json:"-"` // 解码后的 .ovpn 内容
 }
 
 // fetchNodes 拉取并解析 VPN Gate 的节点列表。

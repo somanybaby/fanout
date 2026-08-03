@@ -35,12 +35,6 @@ func (m *Manager) WatchHealth() {
 				continue
 			}
 
-			if !autoReconnectEnabled() {
-				// 用户在设置里关了自动重连：标记掉线但不动它
-				t.Status = "failed"
-				t.Err = "已掉线（自动重连已关闭）"
-				continue
-			}
 			log.Printf("隧道 %d (%s) 已掉线，正在换节点重连", t.Slot, t.Node.HostName)
 			fails[t.Slot] = 0
 			m.reconnect(t, t.Node.HostName)

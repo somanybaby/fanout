@@ -43,9 +43,7 @@ func main() {
 	if err := os.MkdirAll(*workDir, 0700); err != nil {
 		log.Fatalf("创建工作目录失败: %v", err)
 	}
-	if err := loadSettings(*workDir, *publicIP); err != nil {
-		log.Fatalf("加载设置失败: %v", err)
-	}
+	setPublicIPOverride(*publicIP)
 	go hostPublicIP() // 预热探测，别让首个请求阻塞
 	if err := prepareHost(); err != nil {
 		log.Fatal(err)
@@ -101,7 +99,6 @@ func main() {
 	mux.HandleFunc("/api/jobs", apiJobs(mgr))
 	mux.HandleFunc("/api/jobs/dismiss", apiJobDismiss(mgr))
 	mux.HandleFunc("/api/exits", apiExits(mgr))
-	mux.HandleFunc("/api/settings", apiSettings(mgr))
 	mux.HandleFunc("/api/xui", apiXUIStatus)
 	mux.HandleFunc("/api/xui/inbounds", apiXUIInbounds(mgr))
 	mux.HandleFunc("/api/xui/bind", apiXUIBind(mgr))
@@ -123,7 +120,7 @@ func main() {
 		log.Printf("已生成访问口令，见 %s", filepath.Join(*workDir, "password"))
 	}
 
-	basePath, bpCreated, err := LoadBasePath(*workDir)
+	bpCreated, err := initBasePath(*workDir)
 	if err != nil {
 		log.Fatalf("初始化访问路径失败: %v", err)
 	}
@@ -131,10 +128,18 @@ func main() {
 		log.Printf("已生成访问路径，见 %s", filepath.Join(*workDir, "basepath"))
 	}
 
-	addr := fmt.Sprintf(":%d", *webPort)
-	log.Printf("管理界面: http://<本机IP>%s%s/", addr, basePath)
+	webCfg, err := loadWebSettings(*workDir, *webPort)
+	if err != nil {
+		log.Fatalf("加载 Web 设置失败: %v", err)
+	}
+
+	srv := newWebServer(StripBasePath(auth.Wrap(mux)))
+	// 设置面板：改密码 / 改路径 / 改端口 / 改本地监听。
+	mux.HandleFunc("/api/settings", apiSettings(auth, srv))
+
+	log.Printf("管理界面: http://<本机IP>%s%s/", webCfg.listenAddrString(), currentBasePath())
 	log.Printf("SOCKS5 端口在 %d-%d 之间随机分配", randPortMin, randPortMax)
-	if err := http.ListenAndServe(addr, StripBasePath(basePath, auth.Wrap(mux))); err != nil {
+	if err := srv.serve(); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -260,25 +265,63 @@ func apiCred(m *Manager) http.HandlerFunc {
 	}
 }
 
-// apiSettings GET 返回当前设置，POST 保存。母机公网 IP 与自动重连开关都在这里改。
-func apiSettings(m *Manager) http.HandlerFunc {
+// apiSettings 管理界面自身的设置：改密码 / 改路径 / 改端口 / 改本地监听。
+// GET 返回当前值（不含明文口令）；POST 按传入的字段逐项应用，任一项失败即整体回报。
+func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
+	type settingsReq struct {
+		Password   *string `json:"password"`    // 非空则改口令
+		BasePath   *string `json:"base_path"`   // 提供即改访问路径（空串=去掉前缀）
+		Port       *int    `json:"port"`        // 提供即改监听端口
+		ListenAddr *string `json:"listen_addr"` // 提供即改监听地址
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
-			var in Settings
+			var in settingsReq
 			if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求格式错误"})
 				return
 			}
-			if err := updateSettings(in); err != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-				return
+
+			// 改口令
+			if in.Password != nil && *in.Password != "" {
+				if err := auth.SetPassword(*in.Password); err != nil {
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+					return
+				}
+			}
+			// 改访问路径
+			if in.BasePath != nil {
+				if _, err := setBasePath(*in.BasePath); err != nil {
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+					return
+				}
+			}
+			// 改端口 / 监听地址：合成一份新的 WebSettings 一起应用，避免绑两次
+			if in.Port != nil || in.ListenAddr != nil {
+				next := getWebSettings()
+				if in.Port != nil {
+					next.Port = *in.Port
+				}
+				if in.ListenAddr != nil {
+					next.ListenAddr = *in.ListenAddr
+				}
+				if err := srv.applyWebSettings(next); err != nil {
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+					return
+				}
 			}
 		}
-		s := getSettings()
+
+		cfg := getWebSettings()
+		listen := cfg.ListenAddr
+		if listen == "" {
+			listen = "0.0.0.0"
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"public_ip":      s.PublicIP,
-			"auto_reconnect": s.AutoReconnect,
-			"detected_ip":    hostPublicIP(),
+			"base_path":    currentBasePath(),
+			"port":         cfg.Port,
+			"listen_addr":  listen,
+			"has_password": true,
 		})
 	}
 }

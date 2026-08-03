@@ -18,6 +18,7 @@ import (
 // Auth 给管理界面加一层登录。
 // 口令存在工作目录下，首次启动自动生成，避免公网上裸奔。
 type Auth struct {
+	dir      string
 	password string
 	mu       sync.RWMutex
 	sessions map[string]time.Time
@@ -63,6 +64,7 @@ func NewAuth(dir string) (*Auth, bool, error) {
 	}
 
 	return &Auth{
+		dir:      dir,
 		password: strings.TrimSpace(string(blob)),
 		sessions: map[string]time.Time{},
 		fails:    map[string]*loginFails{},
@@ -79,9 +81,36 @@ func randomToken(n int) (string, error) {
 
 // check 比对口令，用恒定时间比较避免时序泄漏。
 func (a *Auth) check(pw string) bool {
-	want := sha256.Sum256([]byte(a.password))
+	a.mu.RLock()
+	cur := a.password
+	a.mu.RUnlock()
+	want := sha256.Sum256([]byte(cur))
 	got := sha256.Sum256([]byte(pw))
 	return subtle.ConstantTimeCompare(want[:], got[:]) == 1
+}
+
+// SetPassword 改访问口令并落盘。空口令拒绝，避免误改成无密码裸奔。
+// 改完不动已有会话：当前登录的浏览器不会被踢，新登录才用新口令。
+func (a *Auth) SetPassword(pw string) error {
+	pw = strings.TrimSpace(pw)
+	if pw == "" {
+		return fmt.Errorf("口令不能为空")
+	}
+	if len(pw) < 4 {
+		return fmt.Errorf("口令至少 4 位")
+	}
+	path := filepath.Join(a.dir, "password")
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(pw+"\n"), 0600); err != nil {
+		return fmt.Errorf("写口令文件失败: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("保存口令失败: %w", err)
+	}
+	a.mu.Lock()
+	a.password = pw
+	a.mu.Unlock()
+	return nil
 }
 
 // issue 发一个会话 token。

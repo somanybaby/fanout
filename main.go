@@ -31,8 +31,6 @@ func main() {
 	if *publicIP == "" {
 		*publicIP = os.Getenv("FANOUT_PUBLIC_IP")
 	}
-	setPublicIPOverride(*publicIP)
-	go hostPublicIP() // 预热探测，别让首个请求阻塞
 
 	if *showVersion {
 		fmt.Println("fanout", version)
@@ -45,6 +43,10 @@ func main() {
 	if err := os.MkdirAll(*workDir, 0700); err != nil {
 		log.Fatalf("创建工作目录失败: %v", err)
 	}
+	if err := loadSettings(*workDir, *publicIP); err != nil {
+		log.Fatalf("加载设置失败: %v", err)
+	}
+	go hostPublicIP() // 预热探测，别让首个请求阻塞
 	if err := prepareHost(); err != nil {
 		log.Fatal(err)
 	}
@@ -99,6 +101,7 @@ func main() {
 	mux.HandleFunc("/api/jobs", apiJobs(mgr))
 	mux.HandleFunc("/api/jobs/dismiss", apiJobDismiss(mgr))
 	mux.HandleFunc("/api/exits", apiExits(mgr))
+	mux.HandleFunc("/api/settings", apiSettings(mgr))
 	mux.HandleFunc("/api/xui", apiXUIStatus)
 	mux.HandleFunc("/api/xui/inbounds", apiXUIInbounds(mgr))
 	mux.HandleFunc("/api/xui/bind", apiXUIBind(mgr))
@@ -253,6 +256,29 @@ func apiCred(m *Manager) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, map[string]string{
 			"user": cred.User,
 			"pass": cred.Pass,
+		})
+	}
+}
+
+// apiSettings GET 返回当前设置，POST 保存。母机公网 IP 与自动重连开关都在这里改。
+func apiSettings(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			var in Settings
+			if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求格式错误"})
+				return
+			}
+			if err := updateSettings(in); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+		}
+		s := getSettings()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"public_ip":      s.PublicIP,
+			"auto_reconnect": s.AutoReconnect,
+			"detected_ip":    hostPublicIP(),
 		})
 	}
 }

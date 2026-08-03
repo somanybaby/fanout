@@ -114,19 +114,75 @@ func (m *Manager) Start(node Node) (*Tunnel, error) {
 // 那条路径随后会调 rebind/resync 把入站改绑到新节点，在那之前重建配置
 // 会因为入站还指着旧节点名而把路由规则丢掉。
 func (m *Manager) bringUp(t *Tunnel, notify bool) {
+	m.bringUpPersist(t, notify, false)
+}
+
+// 自动重连的退避区间：一轮候选全挂后等一会儿再刷新节点列表重来，
+// 别把死节点列表打爆，也别让恢复拖太久。
+const (
+	reconnectBackoffMin = 5 * time.Second
+	reconnectBackoffMax = 60 * time.Second
+)
+
+// bringUpPersist 把一条隧道拉起来。
+//
+// persist=false（手动新建）：走一轮候选，全失败就标 failed，让用户能立刻看到并重试。
+// persist=true（自动重连 / 重启恢复）：一轮全失败不放弃，退避后刷新节点列表再来一轮，
+// 一直循环到连上或这条隧道被用户停掉。VPN Gate 死节点多，"当前都不可用"往往只是
+// 这一批候选恰好都挂了，过一会儿就有新节点，不该让出口永久躺死。
+func (m *Manager) bringUpPersist(t *Tunnel, notify bool, persist bool) {
+	backoff := reconnectBackoffMin
+	for {
+		if m.tryCandidates(t, notify) {
+			return
+		}
+		// 隧道已被用户停掉或从管理器移除，别再重试
+		if !persist || !m.tunnelActive(t) {
+			if persist {
+				return
+			}
+			t.Status = "failed"
+			if serr := m.saveState(); serr != nil {
+				log.Printf("保存状态失败: %v", serr)
+			}
+			return
+		}
+
+		t.Status = "starting"
+		t.Err = fmt.Sprintf("暂无可用节点，%.0f 秒后重试", backoff.Seconds())
+		log.Printf("隧道 %d 一轮候选均失败，%.0f 秒后刷新节点重试", t.Slot, backoff.Seconds())
+		time.Sleep(backoff)
+		if !m.tunnelActive(t) {
+			return
+		}
+		if _, err := m.RefreshNodes(); err != nil {
+			log.Printf("重试前刷新节点列表失败: %v", err)
+		}
+		if backoff < reconnectBackoffMax {
+			backoff *= 2
+			if backoff > reconnectBackoffMax {
+				backoff = reconnectBackoffMax
+			}
+		}
+	}
+}
+
+// tryCandidates 走一轮候选节点，成功返回 true。失败不改 Status（留给调用方决定）。
+func (m *Manager) tryCandidates(t *Tunnel, notify bool) bool {
 	// VPN Gate 是志愿者节点，列表里有相当比例已下线或满员（AUTH_FAILED），
 	// 连不上就顺着候选列表换下一个，不必让用户手动试。
 	candidates := m.candidatesFor(t.Node)
-	var lastErr error
-
 	for i, node := range candidates {
+		if !m.tunnelActive(t) {
+			return false
+		}
 		// 其他隧道可能在重试期间占用了这个节点，跳过以免多个端口撞同一出口 IP
 		if i > 0 && m.nodeInUse(node.HostName, t.Slot) {
 			continue
 		}
 		t.Node = node
+		t.Status = "starting"
 		if i > 0 {
-			t.Status = "starting"
 			t.Err = fmt.Sprintf("已换到第 %d 个候选节点", i+1)
 		}
 
@@ -140,19 +196,24 @@ func (m *Manager) bringUp(t *Tunnel, notify bool) {
 			if notify {
 				m.notifyPanel()
 			}
-			return
+			return true
 		}
-		lastErr = err
 		t.teardownNetns()
 	}
+	return false
+}
 
-	t.Status = "failed"
-	if lastErr != nil {
-		t.Err = fmt.Sprintf("尝试 %d 个节点均失败，最后一个: %v", len(candidates), lastErr)
+// tunnelActive 判断这条隧道是否还归管理器所有且未被用户停掉。
+// 用指针比对：Stop 会从 map 里删除并把 Status 置 stopped，
+// 重连循环据此退出，避免对着一条已经不存在的隧道空转。
+func (m *Manager) tunnelActive(t *Tunnel) bool {
+	if t.Status == "stopped" {
+		return false
 	}
-	if serr := m.saveState(); serr != nil {
-		log.Printf("保存状态失败: %v", serr)
-	}
+	m.mu.RLock()
+	cur, ok := m.tunnels[t.Slot]
+	m.mu.RUnlock()
+	return ok && cur == t
 }
 
 // tryNode 尝试用当前节点把隧道拉起来。

@@ -186,6 +186,9 @@ textarea:focus{outline:none;border-color:var(--accent)}
   <h1>fanout</h1>
   <span class="count" id="panel"></span>
   <span class="spacer"></span>
+  <button class="icon" id="settingsBtn" title="设置">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+  </button>
   <nav class="links">
     <a href="https://t.me/+ft-zI76oovgwNmRh" target="_blank" rel="noopener">交流群</a>
     <a href="https://youtube.com/@joeyblog" target="_blank" rel="noopener">油管</a>
@@ -413,6 +416,32 @@ textarea:focus{outline:none;border-color:var(--accent)}
       </button>
     </div>
     <div class="body"><textarea id="exbox" spellcheck="false" readonly></textarea></div>
+  </div>
+</div>
+
+<div class="modal" id="settings">
+  <div class="sheet">
+    <div class="head">
+      <h2>设置</h2>
+      <span class="spacer"></span>
+      <button class="icon" data-close="settings" title="关闭">
+        <svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+    <div class="body">
+      <label class="f"><span>母机公网 IPv4</span>
+        <input id="setIP" type="text" spellcheck="false" placeholder="留空自动探测"></label>
+      <div class="hint" id="setIPHint">分享链接和 SOCKS5 地址都用这个地址。留空就自动探测母机公网 IP。</div>
+      <label class="chk" style="margin-top:16px">
+        <input type="checkbox" id="setAuto"> 出口掉线自动换节点重连
+      </label>
+      <div class="hint">关掉后，掉线的出口会停在原地不动，需要你手动换节点。</div>
+    </div>
+    <div class="foot">
+      <span class="spacer"></span>
+      <button data-close="settings">取消</button>
+      <button class="primary" id="setSave">保存</button>
+    </div>
   </div>
 </div>
 
@@ -1089,6 +1118,38 @@ $('#exportAll').onclick = async () => {
   }catch(err){ $('#exbox').value = '导出失败: ' + err.message; }
 };
 $('#copyall').onclick = () => { const v = $('#exbox').value; if(v) copy(v); };
+
+// ---- 设置 ----
+$('#settingsBtn').onclick = async () => {
+  $('#setIP').value = '';
+  $('#setAuto').checked = true;
+  $('#setIPHint').textContent = '读取中…';
+  openModal('settings');
+  try{
+    const s = await api('/api/settings');
+    $('#setIP').value = s.public_ip || '';
+    $('#setAuto').checked = s.auto_reconnect !== false;
+    $('#setIP').placeholder = s.detected_ip ? ('自动探测：' + s.detected_ip) : '留空自动探测';
+    $('#setIPHint').textContent = '分享链接和 SOCKS5 地址都用这个地址。留空就自动探测母机公网 IP。';
+  }catch(err){ $('#setIPHint').textContent = '读取失败: ' + err.message; }
+};
+$('#setSave').onclick = async e => {
+  e.target.disabled = true;
+  try{
+    await api('/api/settings', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        public_ip: $('#setIP').value.trim(),
+        auto_reconnect: $('#setAuto').checked,
+      }),
+    });
+    toast('已保存');
+    closeModal('settings');
+    poll();
+  }catch(err){ toast(err.message, true); }
+  e.target.disabled = false;
+};
 
 poll();
 setInterval(poll, 3000);

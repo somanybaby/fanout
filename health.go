@@ -2,9 +2,9 @@ package main
 
 import (
 	"log"
+	"os/exec"
 	"strconv"
 	"strings"
-	"os/exec"
 	"time"
 )
 
@@ -35,6 +35,12 @@ func (m *Manager) WatchHealth() {
 				continue
 			}
 
+			if !autoReconnectEnabled() {
+				// 用户在设置里关了自动重连：标记掉线但不动它
+				t.Status = "failed"
+				t.Err = "已掉线（自动重连已关闭）"
+				continue
+			}
 			log.Printf("隧道 %d (%s) 已掉线，正在换节点重连", t.Slot, t.Node.HostName)
 			fails[t.Slot] = 0
 			m.reconnect(t, t.Node.HostName)
@@ -82,7 +88,7 @@ func (m *Manager) reconnect(t *Tunnel, oldHost string) {
 	go func() {
 		// 通知延后到 rebind/resync 之后：那两步会把入站改绑到新节点，
 		// 提前重建配置会因为入站还指着旧节点名而丢掉路由规则
-		m.bringUp(t, false)
+		m.bringUpPersist(t, false, true)
 		if t.Status != "up" {
 			return
 		}

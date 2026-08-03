@@ -142,6 +142,14 @@ select:focus,input[type=search]:focus,input[type=text]:focus{outline:none;border
 .hint{color:var(--dim);font-size:11px;margin-top:6px}
 .setrow{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px}
 .setrow input,.setrow select{width:100%}
+.updsec{margin-top:18px;padding-top:14px;border-top:1px solid var(--line)}
+.updrow{display:flex;align-items:center;gap:10px}
+.updver{font-size:12px;color:var(--text)}
+.updver b{font-weight:600}
+.updver span{color:var(--dim);margin-left:8px}
+.updnotes{margin-top:10px;padding:10px;background:#0e1116;border:1px solid var(--line);
+  border-radius:4px;font-size:12px;line-height:1.6;color:var(--dim);white-space:pre-wrap;
+  max-height:180px;overflow:auto}
 label.chk{display:flex;align-items:center;gap:7px;color:var(--text);font-size:12px;
   cursor:pointer;margin:0}
 label.chk input{margin:0}
@@ -449,6 +457,16 @@ textarea:focus{outline:none;border-color:var(--accent)}
           </select></label>
       </div>
       <div class="hint bad" id="setPortHint">改端口或监听地址会切换监听，保存后要用新地址重新打开界面。</div>
+
+      <div class="updsec">
+        <div class="updrow">
+          <div class="updver">版本 <b id="updCur">-</b><span id="updLatest"></span></div>
+          <span class="spacer"></span>
+          <button id="updCheck">检查更新</button>
+          <button class="primary" id="updApply" hidden>更新到 <span id="updApplyVer"></span></button>
+        </div>
+        <div class="updnotes" id="updNotes" hidden></div>
+      </div>
     </div>
     <div class="foot">
       <span class="spacer"></span>
@@ -1146,7 +1164,61 @@ $('#settingsBtn').onclick = async () => {
     $('#setPort').value = s.port || '';
     $('#setListen').value = s.listen_addr || '0.0.0.0';
     $('#setPathHint').textContent = '界面挂在这个路径下，扫端口的探不到。只能用字母数字和 - _。';
+    $('#updCur').textContent = s.version || '-';
+    $('#updLatest').textContent = '';
+    $('#updNotes').hidden = true;
+    $('#updApply').hidden = true;
+    $('#updCheck').disabled = false;
+    $('#updCheck').textContent = '检查更新';
   }catch(err){ $('#setPathHint').textContent = '读取失败: ' + err.message; }
+};
+
+// 检查更新：问后端 GitHub 最新版，有新版就亮出更新按钮和更新内容
+$('#updCheck').onclick = async e => {
+  e.target.disabled = true;
+  e.target.textContent = '检查中…';
+  try{
+    const u = await api('/api/update/check');
+    $('#updCur').textContent = u.current || '-';
+    if(u.has_update){
+      $('#updLatest').textContent = '有新版本 ' + u.latest;
+      $('#updApplyVer').textContent = u.latest;
+      $('#updApply').hidden = false;
+      $('#updNotes').textContent = u.notes || '（这个版本没写更新说明）';
+      $('#updNotes').hidden = false;
+    } else {
+      $('#updLatest').textContent = '已是最新';
+      $('#updApply').hidden = true;
+      $('#updNotes').hidden = true;
+    }
+  }catch(err){ toast(err.message, true); }
+  e.target.disabled = false;
+  e.target.textContent = '检查更新';
+};
+
+// 一键更新：后端下载替换二进制并重启服务，进程重启期间界面会短暂断连
+$('#updApply').onclick = async e => {
+  if(!confirm('更新到 ' + $('#updApplyVer').textContent + '？服务会重启，界面会短暂断开。')) return;
+  e.target.disabled = true;
+  e.target.textContent = '更新中…';
+  try{
+    const r = await api('/api/update/apply', {method:'POST'});
+    if(r.restarting){
+      $('#updNotes').textContent = '已下载新版本，服务正在重启，几秒后刷新页面即可。';
+      $('#updNotes').hidden = false;
+      toast('更新中，服务重启后刷新页面');
+      // 给服务重启留点时间再自动刷新
+      setTimeout(() => location.reload(), 6000);
+    } else {
+      toast(r.message || '已是最新版');
+      e.target.disabled = false;
+      e.target.textContent = '更新到 ' + $('#updApplyVer').textContent;
+    }
+  }catch(err){
+    toast(err.message, true);
+    e.target.disabled = false;
+    e.target.textContent = '更新到 ' + $('#updApplyVer').textContent;
+  }
 };
 
 // 端口/监听地址变了要提示用户之后从新地址进；密码/路径可原地生效

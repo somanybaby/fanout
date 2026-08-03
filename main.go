@@ -136,6 +136,8 @@ func main() {
 	srv := newWebServer(StripBasePath(auth.Wrap(mux)))
 	// 设置面板：改密码 / 改路径 / 改端口 / 改本地监听。
 	mux.HandleFunc("/api/settings", apiSettings(auth, srv))
+	mux.HandleFunc("/api/update/check", apiUpdateCheck)
+	mux.HandleFunc("/api/update/apply", apiUpdateApply)
 
 	log.Printf("管理界面: http://<本机IP>%s%s/", webCfg.listenAddrString(), currentBasePath())
 	log.Printf("SOCKS5 端口在 %d-%d 之间随机分配", randPortMin, randPortMax)
@@ -322,8 +324,42 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 			"port":         cfg.Port,
 			"listen_addr":  listen,
 			"has_password": true,
+			"version":      version,
 		})
 	}
+}
+
+// apiUpdateCheck 问 GitHub 最新 release，回报当前/最新版本与更新内容。
+func apiUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	st, err := checkUpdate()
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "检查更新失败: " + err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
+// apiUpdateApply 下载最新版替换二进制并重启服务。成功后进程会被拉起成新版本。
+func apiUpdateApply(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "用 POST"})
+		return
+	}
+	st, err := checkUpdate()
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "检查更新失败: " + err.Error()})
+		return
+	}
+	if !st.HasUpdate {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "restarting": false, "message": "已经是最新版"})
+		return
+	}
+	if err := applyUpdate(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	// 先把响应发回去，restartSelf 已排在延迟后触发
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "restarting": true, "latest": st.Latest})
 }
 
 // apiExits 返回主界面需要的一切：出口以及挂在它上面的入站。

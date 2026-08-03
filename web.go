@@ -475,7 +475,7 @@ async function copy(text){
   toast(ok ? '已复制' : '复制失败，请手动选中', !ok);
 }
 
-let view = {exits:[], direct:[], panel:'', backend:''};
+let view = {exits:[], direct:[], panel:'', backend:'', public_ip:''};
 let inbounds = [];
 
 // 自建模式下入站由 fanout 自己管，界面要提供新建入口；
@@ -1018,11 +1018,11 @@ function socksURL(host, port, user, pass){
   return 'socks5://' + user + ':' + pass + '@' + host + ':' + port;
 }
 
-// SOCKS5 端口监听在本机（跑 fanout 的这台服务器）上，客户端要连的是
-// 访问面板用的这个地址，流量再从出口 IP 出去。出口 IP 是"出去以后"的地址，
-// 不能拿来当连接地址。
+// SOCKS5 端口监听在母机（跑 fanout 的这台服务器）上，客户端要连的是母机的
+// 公网 IPv4，流量再从出口 IP 出去。出口 IP 是"出去以后"的地址，不能当连接地址。
+// public_ip 是后端探测到的母机公网地址；探测不到才退回访问面板用的主机名。
 function credHost(e){
-  return location.hostname || e.host;
+  return view.public_ip || location.hostname || e.host;
 }
 
 function openCred(slot){

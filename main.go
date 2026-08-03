@@ -24,8 +24,15 @@ func main() {
 		workDir  = flag.String("dir", "/var/lib/fanout", "工作目录")
 	)
 	panelMode := flag.String("panel", "", "节点链接后端: 留空自动探测, 3x-ui, native")
+	publicIP := flag.String("ip", "", "母机公网 IPv4，用于分享链接/SOCKS5 地址；留空则自动探测")
 	showVersion := flag.Bool("version", false, "显示版本后退出")
 	flag.Parse()
+
+	if *publicIP == "" {
+		*publicIP = os.Getenv("FANOUT_PUBLIC_IP")
+	}
+	setPublicIPOverride(*publicIP)
+	go hostPublicIP() // 预热探测，别让首个请求阻塞
 
 	if *showVersion {
 		fmt.Println("fanout", version)
@@ -438,8 +445,12 @@ func apiXUIDetail(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, detail)
 }
 
-// publicHost 猜一个客户端能连上的地址：优先用访问 fanout 时用的主机名。
+// publicHost 决定分享链接里的连接地址。母机公网 IPv4 才是客户端真正能连上
+// 的地址，所以优先用它；探测不到（比如纯内网）再退回访问 fanout 时用的主机名。
 func publicHost(r *http.Request) string {
+	if ip := hostPublicIP(); ip != "" {
+		return ip
+	}
 	host := r.Host
 	if i := strings.LastIndex(host, ":"); i > 0 {
 		host = host[:i]

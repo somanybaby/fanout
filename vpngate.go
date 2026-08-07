@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +14,27 @@ import (
 )
 
 const vpngateAPI = "https://www.vpngate.net/api/iphone/"
+
+// vpngateMirror 是直连拿不到节点列表时的兜底（Cloudflare Worker 反代）。
+// 用 FANOUT_VPNGATE_MIRROR 可以换成自己的地址，设成空字符串就只走直连。
+const vpngateMirror = "https://p.xy.kg/vpngate"
+
+// mirrorKey 只是让反代不被爬虫和端口扫描白嫖，不是安全边界。
+const mirrorKey = "8rhIFzFKRJMFAe-xP5OQPclDEvSjKlHo"
+
+func mirrorURL() string {
+	if v, ok := os.LookupEnv("FANOUT_VPNGATE_MIRROR"); ok {
+		return strings.TrimSpace(v)
+	}
+	return vpngateMirror
+}
+
+func mirrorAccessKey() string {
+	if v, ok := os.LookupEnv("FANOUT_VPNGATE_MIRROR_KEY"); ok {
+		return strings.TrimSpace(v)
+	}
+	return mirrorKey
+}
 
 // Node 是一个 VPN Gate 节点。
 type Node struct {
@@ -27,10 +49,39 @@ type Node struct {
 }
 
 // fetchNodes 拉取并解析 VPN Gate 的节点列表。
+// 先直连；连不上或者拿回来的内容不对（被拦截、返回门户页）就换反代再试一次。
 // 返回的列表已按速度降序排列。
 func fetchNodes(timeout time.Duration) ([]Node, error) {
+	return fetchNodesWith(vpngateAPI, timeout)
+}
+
+// fetchNodesWith 把直连地址拆成参数，方便测试两条分支。
+func fetchNodesWith(direct string, timeout time.Duration) ([]Node, error) {
+	nodes, err := fetchNodesFrom(direct, "", timeout)
+	if err == nil {
+		return nodes, nil
+	}
+	mirror := mirrorURL()
+	if mirror == "" {
+		return nil, err
+	}
+	nodes, mirrorErr := fetchNodesFrom(mirror, mirrorAccessKey(), timeout)
+	if mirrorErr != nil {
+		return nil, fmt.Errorf("直连失败(%v)；反代也失败: %w", err, mirrorErr)
+	}
+	return nodes, nil
+}
+
+func fetchNodesFrom(url, key string, timeout time.Duration) ([]Node, error) {
 	client := &http.Client{Timeout: timeout}
-	resp, err := client.Get(vpngateAPI)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("拉取节点列表失败: %w", err)
+	}
+	if key != "" {
+		req.Header.Set("X-Fanout-Key", key)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("拉取节点列表失败: %w", err)
 	}

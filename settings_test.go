@@ -92,7 +92,7 @@ func TestAuthSetPassword(t *testing.T) {
 
 func TestWebServerReloadSwitchesPort(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := loadWebSettings(dir, 0); err != nil {
+	if _, err := loadWebSettings(dir, 0, false); err != nil {
 		t.Fatalf("loadWebSettings: %v", err)
 	}
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -149,4 +149,42 @@ func freePort(t *testing.T) int {
 	}
 	defer ln.Close()
 	return ln.Addr().(*net.TCPAddr).Port
+}
+
+// 界面上改过端口会落盘。之后再带 -web 启动时，命令行必须说话算话，
+// 否则用户敲了参数却连不上，还没有任何提示（ct-54 上真实踩到）。
+func TestLoadWebSettingsExplicitFlagWins(t *testing.T) {
+	dir := t.TempDir()
+
+	// 首次启动：建档存 8899
+	if _, err := loadWebSettings(dir, 8899, false); err != nil {
+		t.Fatalf("首次: %v", err)
+	}
+
+	// 不带 -web 重启：沿用盘上的 8899，不被默认值覆盖
+	s, err := loadWebSettings(dir, 8899, false)
+	if err != nil {
+		t.Fatalf("沿用: %v", err)
+	}
+	if s.Port != 8899 {
+		t.Fatalf("没显式指定时应沿用盘上的值，实际 %d", s.Port)
+	}
+
+	// 显式 -web 80：以命令行为准
+	s, err = loadWebSettings(dir, 80, true)
+	if err != nil {
+		t.Fatalf("显式指定: %v", err)
+	}
+	if s.Port != 80 {
+		t.Fatalf("显式 -web 应压过盘上的值，实际 %d", s.Port)
+	}
+
+	// 且要落盘，下次不带参数启动仍是 80
+	s, err = loadWebSettings(dir, 8899, false)
+	if err != nil {
+		t.Fatalf("复读: %v", err)
+	}
+	if s.Port != 80 {
+		t.Fatalf("显式指定的端口应已写回，实际 %d", s.Port)
+	}
 }

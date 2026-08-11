@@ -29,8 +29,12 @@ var (
 
 func webSettingsFilePath(dir string) string { return filepath.Join(dir, "settings.json") }
 
-// loadWebSettings 读盘并返回当前配置。文件不存在时用传入的 flag 默认值建档。
-func loadWebSettings(dir string, defaultPort int) (WebSettings, error) {
+// loadWebSettings 读盘并返回当前配置。
+//
+// portExplicit 表示用户在命令行显式给了 -web。界面上改过端口之后会落盘，
+// 之前这里一律以盘上为准，导致再带 -web 启动会被静默忽略——用户敲了参数却
+// 连不上，也没有任何提示。显式指定时以命令行为准并写回，让参数说话算话。
+func loadWebSettings(dir string, defaultPort int, portExplicit bool) (WebSettings, error) {
 	webSettingsPath = webSettingsFilePath(dir)
 
 	s := WebSettings{Port: defaultPort, ListenAddr: ""}
@@ -50,9 +54,17 @@ func loadWebSettings(dir string, defaultPort int) (WebSettings, error) {
 	if s.Port == 0 {
 		s.Port = defaultPort
 	}
+	changed := false
+	if portExplicit && s.Port != defaultPort {
+		s.Port = defaultPort
+		changed = true
+	}
 	webSettingsMu.Lock()
 	webSettingsCur = s
 	webSettingsMu.Unlock()
+	if changed {
+		return s, saveWebSettings()
+	}
 	return s, nil
 }
 

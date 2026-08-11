@@ -129,7 +129,14 @@ func main() {
 		log.Printf("已生成访问路径，见 %s", filepath.Join(*workDir, "basepath"))
 	}
 
-	webCfg, err := loadWebSettings(*workDir, *webPort)
+	// 用户显式给了 -web 就以命令行为准，否则沿用界面上存过的端口
+	portExplicit := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "web" {
+			portExplicit = true
+		}
+	})
+	webCfg, err := loadWebSettings(*workDir, *webPort, portExplicit)
 	if err != nil {
 		log.Fatalf("加载 Web 设置失败: %v", err)
 	}

@@ -2,7 +2,10 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -88,14 +91,38 @@ var panelState struct {
 	forced  string
 }
 
+// panelModeFile 存界面里选过的后端。命令行 -panel 优先级更高。
+func panelModeFile(dir string) string { return filepath.Join(dir, "panel_mode") }
+
 // configurePanel 记录自建模式需要的工作目录与用户指定的模式。
-// mode 为空表示自动探测，也可以是 "3x-ui" 或 "native"。
+// mode 为空表示读盘上界面选过的模式，都没有才自动探测。
 func configurePanel(workDir, mode string) {
 	panelState.mu.Lock()
 	defer panelState.mu.Unlock()
 	panelState.workDir = workDir
+	if mode == "" {
+		blob, err := os.ReadFile(panelModeFile(workDir))
+		if err == nil {
+			mode = strings.TrimSpace(string(blob))
+		}
+	}
 	panelState.forced = mode
 	panelState.current = nil
+}
+
+// savePanelMode 把界面选的后端记到工作目录，重启后仍然生效。空值等于删档回到自动探测。
+func savePanelMode(dir, mode string) error {
+	if dir == "" {
+		return nil
+	}
+	path := panelModeFile(dir)
+	if mode == "" {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	return os.WriteFile(path, []byte(mode), 0600)
 }
 
 // openPanel 返回当前可用的后端。
@@ -125,6 +152,18 @@ func openPanel() (Panel, error) {
 		}
 		panelState.current = n
 		return n, nil
+	case "xray-cf-lite":
+		xc, err := DetectXCL()
+		if err != nil {
+			return nil, fmt.Errorf("指定了 xray-cf-lite 模式但探测失败: %w", err)
+		}
+		panelState.current = xc
+		return xc, nil
+	}
+
+	if xc, err := DetectXCL(); err == nil {
+		panelState.current = xc
+		return xc, nil
 	}
 
 	if x, err := DetectXUI(panelState.workDir); err == nil {
@@ -141,6 +180,80 @@ func openPanel() (Panel, error) {
 	}
 	panelState.current = n
 	return n, nil
+}
+
+// currentPanelMode 返回当前生效的后端类型（forced 为空时按已选定的 current 推断）。
+func currentPanelMode() string {
+	panelState.mu.Lock()
+	defer panelState.mu.Unlock()
+	if panelState.forced != "" {
+		return panelState.forced
+	}
+	if panelState.current != nil {
+		return panelState.current.Kind()
+	}
+	return ""
+}
+
+// availablePanelModes 探测每种后端在本机是否可用，供界面渲染可选项。
+func availablePanelModes(workDir string) []map[string]any {
+	modes := []map[string]any{}
+
+	xcOK, xcReason := true, ""
+	if _, err := DetectXCL(); err != nil {
+		xcOK, xcReason = false, err.Error()
+	}
+	modes = append(modes, map[string]any{"mode": "xray-cf-lite", "label": "xray-cf-lite", "available": xcOK, "reason": xcReason})
+
+	xuiOK, xuiReason := true, ""
+	if _, err := DetectXUI(workDir); err != nil {
+		xuiOK, xuiReason = false, err.Error()
+	}
+	modes = append(modes, map[string]any{"mode": "3x-ui", "label": "3x-ui 面板", "available": xuiOK, "reason": xuiReason})
+
+	// 自建模式总是可用（fanout 自己跑 Xray），前提是能找到 xray 二进制，这里不预判，交给切换时报错。
+	modes = append(modes, map[string]any{"mode": "native", "label": "自建 Xray", "available": true, "reason": ""})
+
+	return modes
+}
+
+// switchPanelMode 运行时切换后端。mode 传空表示恢复自动探测。
+//
+// 先关掉旧后端释放资源，再按新模式探测；探测失败时回滚到自动模式，
+// 避免把 fanout 卡在一个连不上的后端上。
+func switchPanelMode(mode string) (Panel, error) {
+	switch mode {
+	case "", "3x-ui", "native", "xray-cf-lite":
+	default:
+		return nil, fmt.Errorf("未知后端模式 %q", mode)
+	}
+
+	panelState.mu.Lock()
+	old := panelState.current
+	workDir := panelState.workDir
+	panelState.mu.Unlock()
+	if old != nil {
+		old.Close()
+	}
+
+	panelState.mu.Lock()
+	panelState.forced = mode
+	panelState.current = nil
+	panelState.mu.Unlock()
+
+	p, err := openPanel()
+	if err != nil {
+		// 回滚到自动探测，别把用户卡在坏模式里
+		panelState.mu.Lock()
+		panelState.forced = ""
+		panelState.current = nil
+		panelState.mu.Unlock()
+		return nil, err
+	}
+	if err := savePanelMode(workDir, mode); err != nil {
+		log.Printf("记录后端模式失败（本次切换仍然生效）: %v", err)
+	}
+	return p, nil
 }
 
 // xuiAbsent 判断本机是否根本没装 3x-ui。

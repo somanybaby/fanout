@@ -23,7 +23,7 @@ func main() {
 		maxSlots = flag.Int("max", 20, "最多同时运行的隧道数")
 		workDir  = flag.String("dir", "/var/lib/fanout", "工作目录")
 	)
-	panelMode := flag.String("panel", "", "节点链接后端: 留空自动探测, 3x-ui, native")
+	panelMode := flag.String("panel", "", "节点链接后端: 留空按界面设置/自动探测, 3x-ui, native, xray-cf-lite")
 	publicIP := flag.String("ip", "", "母机公网 IPv4，用于分享链接/SOCKS5 地址；留空则自动探测")
 	showVersion := flag.Bool("version", false, "显示版本后退出")
 	flag.Parse()
@@ -111,6 +111,7 @@ func main() {
 	mux.HandleFunc("/api/panel/client/add", apiClientAdd(mgr))
 	mux.HandleFunc("/api/panel/client/del", apiClientDelete(mgr))
 	mux.HandleFunc("/api/panel/client/reset", apiClientReset(mgr))
+	mux.HandleFunc("/api/panel/mode", apiPanelMode(*workDir))
 
 	auth, created, err := NewAuth(*workDir)
 	if err != nil {
@@ -419,12 +420,14 @@ func apiXUIStatus(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	// xray-cf-lite 模式下节点由 xray-cf-lite 管，fanout 只改路由，不提供新建入口。
+	_, isXCL := p.(*XCL)
 	resp := map[string]any{
 		"available": true,
 		"kind":      p.Kind(),
 		"describe":  p.Describe(),
-		// 两种后端都能建入站：自建模式写自己的库，3x-ui 走面板的 inbounds/add API
-		"can_create": true,
+		// 自建/3x-ui 能建入站；xray-cf-lite 只能改路由
+		"can_create": !isXCL,
 	}
 	if x, ok := p.(*XUI); ok {
 		resp["port"] = x.Port
@@ -433,6 +436,43 @@ func apiXUIStatus(w http.ResponseWriter, r *http.Request) {
 		resp["host"] = x.Host
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// apiPanelMode 读取/切换节点链接后端。
+// GET 返回当前模式与本机可选模式；POST {"mode":"..."} 运行时切换，空 mode = 恢复自动探测。
+func apiPanelMode(workDir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			var in struct {
+				Mode string `json:"mode"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求格式错误"})
+				return
+			}
+			p, err := switchPanelMode(in.Mode)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			invalidateInbounds()
+			writeJSON(w, http.StatusOK, map[string]any{
+				"mode":     currentPanelMode(),
+				"kind":     p.Kind(),
+				"describe": p.Describe(),
+			})
+			return
+		}
+		resp := map[string]any{
+			"mode":  currentPanelMode(),
+			"modes": availablePanelModes(workDir),
+		}
+		if p, err := openPanel(); err == nil {
+			resp["kind"] = p.Kind()
+			resp["describe"] = p.Describe()
+		}
+		writeJSON(w, http.StatusOK, resp)
+	}
 }
 
 // apiXUIInbounds 列出面板里已有的入站及其绑定状态。

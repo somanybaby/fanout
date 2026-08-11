@@ -168,11 +168,13 @@ else
 fi
 
 echo "[3/6] 准备 Xray"
-# 没装 3x-ui 时 fanout 自己跑 Xray，需要一份二进制。
+# 没有现成面板接管时 fanout 自己跑 Xray，需要一份二进制。
 # 装到 WORK_DIR/bin 下而不是 /usr/local/bin，避免和机器上别人的 xray 抢版本。
 mkdir -p "${WORK_DIR}/bin"
 if command -v /usr/local/x-ui/x-ui >/dev/null 2>&1 || [[ -x /usr/bin/x-ui ]]; then
   echo "      检测到 3x-ui，入站交给面板管，跳过"
+elif [[ -d /etc/xray-cf-lite && -f /usr/local/etc/xray/config.json ]]; then
+  echo "      检测到 xray-cf-lite，入站交给它管，跳过"
 elif [[ -x "${WORK_DIR}/bin/xray" ]]; then
   echo "      已有 $("${WORK_DIR}/bin/xray" version 2>/dev/null | head -1)"
 else

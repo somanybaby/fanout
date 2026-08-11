@@ -46,7 +46,7 @@ Xray 到 `/var/lib/fanout/bin/`，装了则跳过，入站交给面板管。
 **Alpine** 默认不带 bash，先装一下：
 
 ```bash
-apk add bash
+apk add bash curl
 bash <(curl -fsSL https://raw.githubusercontent.com/byJoey/fanout/main/install.sh)
 ```
 

@@ -73,7 +73,14 @@ svc_state() {
   fi
 }
 
+# 端口以 settings.json 为准。老版本把 -web 写死在服务文件里，
+# 两处各改各的会互相拽回旧值，所以这里只认工作目录下的配置。
 web_port() {
+  local p
+  p=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' \
+        "$WORK_DIR/settings.json" 2>/dev/null | head -1)
+  [[ -n $p ]] && { echo "$p"; return; }
+  # 兼容老安装：settings.json 还没生成时退回读服务文件
   grep -oE '\-web [0-9]+' "$UNIT" 2>/dev/null \
     | grep -oE '[0-9]+' | head -1 || echo 8899
 }
@@ -158,7 +165,15 @@ change_port() {
   if ss -tln 2>/dev/null | grep -q ":${new} "; then
     echo -e "  ${R}端口 ${new} 已被占用${N}"; return
   fi
-  sed -i "s/-web ${cur}/-web ${new}/" "$UNIT"
+  # 写 settings.json（权威来源），并把服务文件里可能残留的 -web 一并同步，
+  # 免得老安装重启后又被写死的旧端口拽回去。
+  if [[ -f "$WORK_DIR/settings.json" ]]; then
+    sed -i "s/\"port\"[[:space:]]*:[[:space:]]*[0-9]*/\"port\": ${new}/" "$WORK_DIR/settings.json"
+  else
+    printf '{\n  "port": %s,\n  "listen_addr": ""\n}\n' "$new" > "$WORK_DIR/settings.json"
+    chmod 600 "$WORK_DIR/settings.json"
+  fi
+  sed -i "s/-web ${cur}/-web ${new}/" "$UNIT" 2>/dev/null
   svc_reload
   svc_restart
   echo -e "  ${G}已改为 ${new} 并重启${N}"
@@ -242,6 +257,22 @@ show_links() {
   echo -e "  ${D}用着有问题、或者想要什么功能，去群里说或提 issue。${N}"
 }
 
+# 老版本把 -web 写死在服务文件里，和 settings.json 互相拽回旧值。
+# 更新时把端口搬进配置再从服务文件里摘掉，之后只认一处。
+migrate_port_to_settings() {
+  local unit_port
+  unit_port=$(grep -oE '\-web [0-9]+' "$UNIT" 2>/dev/null | grep -oE '[0-9]+' | head -1)
+  [[ -z $unit_port ]] && return
+
+  if [[ ! -f "$WORK_DIR/settings.json" ]]; then
+    printf '{\n  "port": %s,\n  "listen_addr": ""\n}\n' "$unit_port" > "$WORK_DIR/settings.json"
+    chmod 600 "$WORK_DIR/settings.json"
+  fi
+  sed -i "s/-web ${unit_port} //" "$UNIT"
+  svc_reload
+  echo "  已把端口 ${unit_port} 迁移到 settings.json"
+}
+
 do_update() {
   local arch goarch tmp
   arch=$(uname -m)
@@ -261,6 +292,7 @@ do_update() {
   tar xzf "$tmp/f.tar.gz" -C "$tmp"
   svc_stop
   install -m 755 "$tmp/fanout" "$BIN"
+  migrate_port_to_settings
   svc_start
   rm -rf "$tmp"
   echo -e "  ${G}已更新到 $("$BIN" -version 2>/dev/null)${N}"

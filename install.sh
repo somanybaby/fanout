@@ -6,6 +6,8 @@
 
 set -euo pipefail
 
+# 记下用户是否显式给了 WEB_PORT：重装时只有显式指定才覆盖已保存的端口
+WEB_PORT_EXPLICIT="${WEB_PORT:+1}"
 WEB_PORT="${WEB_PORT:-8899}"
 WORK_DIR="${WORK_DIR:-/var/lib/fanout}"
 BIN=/usr/local/bin/fanout
@@ -26,9 +28,27 @@ else
   exit 1
 fi
 
+# seed_settings 把端口落进 settings.json —— 程序、f 菜单、Web 界面都以它为准。
+#
+# 重装时不覆盖用户已经改过的端口：除非这次显式指定了 WEB_PORT，
+# 否则沿用原值，免得重装一次把人家改好的端口打回默认。
+seed_settings() {
+  local f="${WORK_DIR}/settings.json"
+  if [[ -f "$f" ]] && [[ -z "${WEB_PORT_EXPLICIT:-}" ]]; then
+    local cur
+    cur=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$f" | head -1)
+    [[ -n $cur ]] && { WEB_PORT="$cur"; return; }
+  fi
+  printf '{\n  "port": %s,\n  "listen_addr": ""\n}\n' "$WEB_PORT" > "$f"
+  chmod 600 "$f"
+}
+
 svc_install() {
   if [[ "$INIT_SYS" == systemd ]]; then
-    sed "s#-web 8899#-web ${WEB_PORT}#; s#-dir /var/lib/fanout#-dir ${WORK_DIR}#" fanout.service \
+    # 端口不写进服务文件：它由 ${WORK_DIR}/settings.json 决定（见 seed_settings），
+    # 两处都写会互相拽回旧值——界面改完重启失效，或 f 改完被配置覆盖。
+    # 老版本模板里可能还带 -web，一并去掉。
+    sed "s#-web [0-9]* ##; s#-dir /var/lib/fanout#-dir ${WORK_DIR}#" fanout.service \
       > /etc/systemd/system/fanout.service
     systemctl daemon-reload
   else
@@ -39,7 +59,7 @@ svc_install() {
 name="fanout"
 description="fanout - VPN Gate 出口扇出网关"
 command="${BIN}"
-command_args="-web ${WEB_PORT} -dir ${WORK_DIR}"
+command_args="-dir ${WORK_DIR}"
 command_background=true
 pidfile="/run/fanout.pid"
 output_log="/var/log/fanout.log"
@@ -232,6 +252,7 @@ else
 fi
 mkdir -p "$WORK_DIR"
 chmod 700 "$WORK_DIR"
+seed_settings
 svc_install
 svc_enable_start
 
@@ -250,6 +271,10 @@ done
 
 IP=$(curl -s --max-time 8 http://api.ipify.org || echo "<本机IP>")
 BP=$(cat "${WORK_DIR}/basepath" 2>/dev/null || true)
+# 以配置里的实际端口为准报地址，别让提示和真实监听对不上
+ACTUAL_PORT=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' \
+  "${WORK_DIR}/settings.json" 2>/dev/null | head -1)
+[[ -n $ACTUAL_PORT ]] && WEB_PORT="$ACTUAL_PORT"
 echo
 echo "  管理界面  http://${IP}:${WEB_PORT}/${BP}/"
 echo "  访问口令  $(cat "${WORK_DIR}/password" 2>/dev/null || echo "见 ${WORK_DIR}/password")"

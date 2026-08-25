@@ -12,26 +12,28 @@ import (
 	"time"
 )
 
-// SOCKS5 最小实现：只支持 CONNECT。
-// 域名在本进程内解析，隧道里只跑 TCP，避免依赖隧道内的 UDP/DNS。
+// SOCKS5 实现：支持 CONNECT（TCP）与 UDP ASSOCIATE（UDP 中继，见 udp.go）。
+// 域名在本进程内解析，隧道里只跑 TCP 时不用隧道内的 UDP/DNS；
+// UDP 中继则把客户端的 UDP 包放进隧道（netns）转发。
 //
 // 认证走 RFC1929 用户名/口令。端口对公网敞开，没有口令等于谁扫到谁就能用
 // 这条家宽出口，所以凭据是必需的而不是可选项。
 
 const (
-	socksVer5     = 0x05
-	authNone      = 0x00
-	authUserPass  = 0x02
-	authNoAccept  = 0xff
-	authSubVer    = 0x01
-	cmdConnect    = 0x01
-	atypIPv4      = 0x01
-	atypDomain    = 0x03
-	atypIPv6      = 0x04
-	repSuccess    = 0x00
-	repGenFail    = 0x01
-	repHostUnre   = 0x04
-	repCmdNotSupp = 0x07
+	socksVer5       = 0x05
+	authNone        = 0x00
+	authUserPass    = 0x02
+	authNoAccept    = 0xff
+	authSubVer      = 0x01
+	cmdConnect      = 0x01
+	cmdUDPAssociate = 0x03
+	atypIPv4        = 0x01
+	atypDomain      = 0x03
+	atypIPv6        = 0x04
+	repSuccess      = 0x00
+	repGenFail      = 0x01
+	repHostUnre     = 0x04
+	repCmdNotSupp   = 0x07
 )
 
 // serveSocks 处理一条 SOCKS5 连接。dial 决定流量从哪条链路出去。
@@ -44,13 +46,19 @@ func serveSocks(client net.Conn, cred *SocksCred, dial func(network, addr string
 		return
 	}
 
-	addr, err := socksReadRequest(client)
+	cmd, addr, err := socksReadRequestWithCmd(client)
 	if err != nil {
 		if errors.Is(err, errCmdNotSupported) {
 			socksReply(client, repCmdNotSupp)
 		} else {
 			socksReply(client, repGenFail)
 		}
+		return
+	}
+
+	if cmd == cmdUDPAssociate {
+		_ = client.SetDeadline(time.Time{})
+		serveUDPAssociate(client, dial)
 		return
 	}
 
@@ -143,18 +151,33 @@ func readLenPrefixed(c net.Conn) ([]byte, error) {
 	return b, nil
 }
 
-var errCmdNotSupported = errors.New("仅支持 CONNECT")
+var errCmdNotSupported = errors.New("仅支持 CONNECT 与 UDP ASSOCIATE")
 
 // errIPv6NotSupported 表示拒绝 IPv6 目标：隧道内只有 IPv4。
 var errIPv6NotSupported = errors.New("隧道内不支持 IPv6")
 
+// socksReadRequest 读请求并返回目标地址（仅 CONNECT，兼容旧调用）。
 func socksReadRequest(c net.Conn) (string, error) {
-	head := make([]byte, 4)
-	if _, err := io.ReadFull(c, head); err != nil {
+	cmd, addr, err := socksReadRequestWithCmd(c)
+	if err != nil {
 		return "", err
 	}
-	if head[1] != cmdConnect {
+	if cmd != cmdConnect {
 		return "", errCmdNotSupported
+	}
+	return addr, nil
+}
+
+// socksReadRequestWithCmd 读请求并返回命令与目标地址，支持 CONNECT 与 UDP ASSOCIATE。
+func socksReadRequestWithCmd(c net.Conn) (byte, string, error) {
+	head := make([]byte, 4)
+	if _, err := io.ReadFull(c, head); err != nil {
+		return 0, "", err
+	}
+	switch head[1] {
+	case cmdConnect, cmdUDPAssociate:
+	default:
+		return 0, "", errCmdNotSupported
 	}
 
 	var host string
@@ -162,39 +185,52 @@ func socksReadRequest(c net.Conn) (string, error) {
 	case atypIPv4:
 		b := make([]byte, 4)
 		if _, err := io.ReadFull(c, b); err != nil {
-			return "", err
+			return 0, "", err
 		}
 		host = net.IP(b).String()
 	case atypIPv6:
 		// 隧道内没有 IPv6 路由，放行只会让这条连接绕开隧道
 		b := make([]byte, 16)
 		if _, err := io.ReadFull(c, b); err != nil {
-			return "", err
+			return 0, "", err
 		}
-		return "", errIPv6NotSupported
+		return 0, "", errIPv6NotSupported
 	case atypDomain:
 		l := make([]byte, 1)
 		if _, err := io.ReadFull(c, l); err != nil {
-			return "", err
+			return 0, "", err
 		}
 		b := make([]byte, int(l[0]))
 		if _, err := io.ReadFull(c, b); err != nil {
-			return "", err
+			return 0, "", err
 		}
 		host = string(b)
 	default:
-		return "", fmt.Errorf("不支持的地址类型 %d", head[3])
+		return 0, "", fmt.Errorf("不支持的地址类型 %d", head[3])
 	}
 
 	pb := make([]byte, 2)
 	if _, err := io.ReadFull(c, pb); err != nil {
-		return "", err
+		return 0, "", err
 	}
-	return net.JoinHostPort(host, strconv.Itoa(int(binary.BigEndian.Uint16(pb)))), nil
+	return head[1], net.JoinHostPort(host, strconv.Itoa(int(binary.BigEndian.Uint16(pb)))), nil
 }
 
 func socksReply(c net.Conn, code byte) error {
 	_, err := c.Write([]byte{socksVer5, code, 0x00, atypIPv4, 0, 0, 0, 0, 0, 0})
+	return err
+}
+
+// socksReplyWith 回一个带 BND 地址/端口的应答（UDP ASSOCIATE 需要真实中继地址）。
+func socksReplyWith(c net.Conn, code byte, ip net.IP, port int) error {
+	if ip == nil || ip.To4() == nil {
+		ip = net.IPv4zero
+	}
+	b := make([]byte, 0, 10)
+	b = append(b, socksVer5, code, 0x00, atypIPv4)
+	b = append(b, ip.To4()...)
+	b = append(b, byte(port>>8), byte(port))
+	_, err := c.Write(b)
 	return err
 }
 

@@ -453,7 +453,7 @@ func (m *Manager) Shutdown() {
 
 // prepareHost 打开转发开关。netns 出网依赖它。
 func prepareHost() error {
-	if err := exec.Command("sysctl", "-qw", "net.ipv4.ip_forward=1").Run(); err != nil {
+	if err := cmdRun(exec.Command("sysctl", "-qw", "net.ipv4.ip_forward=1")); err != nil {
 		return fmt.Errorf("开启 ip_forward 失败: %w", err)
 	}
 	return nil

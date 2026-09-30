@@ -67,7 +67,8 @@ func hostPublicIP() string {
 // probePublicIP 逐个问外部接口，拿到第一个合法的 IPv4 就返回。
 func probePublicIP() string {
 	for _, url := range publicIPSources {
-		out, err := exec.Command("curl", "-4", "-s", "--max-time", "5", url).Output()
+		// 必须从母机探：落在隧道里会拿到那条出口的 IP，分享链接就全写错了
+		out, err := cmdOutput(exec.Command("curl", "-4", "-s", "--max-time", "5", url))
 		if err != nil {
 			continue
 		}

@@ -117,7 +117,7 @@ func pickNetBase(abs string) (int, error) {
 // （容器网桥、别的 VPN），免得配上去把人家的路由顶掉。
 func hostUsedNetBases() map[int]bool {
 	used := map[int]bool{defaultNetBase: true}
-	out, err := exec.Command("ip", "-4", "-o", "addr", "show").Output()
+	out, err := cmdOutput(exec.Command("ip", "-4", "-o", "addr", "show"))
 	if err != nil {
 		return used
 	}

@@ -120,8 +120,13 @@ func (t *Tunnel) vethNames() (string, string) {
 	return fmt.Sprintf("fov%s%d", instTag, t.Slot), fmt.Sprintf("fop%s%d", instTag, t.Slot)
 }
 
+// run 执行一条网络配置命令。
+//
+// 走 cmdCombined 而不是直接 exec：建 veth、改 iptables 都是"在当前网络
+// 命名空间里生效"的操作，线程可能已经被 dialerInNetns 带进某条隧道，
+// 那样规则会加到隧道内部，母机上什么也没有（见 netnsguard.go）。
 func run(name string, args ...string) error {
-	out, err := exec.Command(name, args...).CombinedOutput()
+	out, err := cmdCombined(exec.Command(name, args...))
 	if err != nil {
 		return fmt.Errorf("%s %s: %v: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
@@ -130,7 +135,7 @@ func run(name string, args ...string) error {
 
 // runQuiet 执行清理类命令，忽略"本来就不存在"这类错误。
 func runQuiet(name string, args ...string) {
-	_ = exec.Command(name, args...).Run()
+	_ = cmdRun(exec.Command(name, args...))
 }
 
 // setupNetns 建立 netns 与 veth 链路，并配好 NAT 与转发放行。
@@ -187,7 +192,7 @@ func (t *Tunnel) setupNetns() error {
 // ensureRule 幂等追加一条 iptables 规则。
 func ensureRule(table, chain string, spec ...string) {
 	check := append([]string{"-w", "5", "-t", table, "-C", chain}, spec...)
-	if exec.Command("iptables", check...).Run() == nil {
+	if cmdRun(exec.Command("iptables", check...)) == nil {
 		return
 	}
 	add := append([]string{"-w", "5", "-t", table, "-A", chain}, spec...)
@@ -198,7 +203,7 @@ func ensureRule(table, chain string, spec ...string) {
 // FORWARD 链末尾常有兜底 REJECT，必须插到最前面才生效。
 func ensureRuleInsert(table, chain string, spec ...string) {
 	check := append([]string{"-w", "5", "-t", table, "-C", chain}, spec...)
-	if exec.Command("iptables", check...).Run() == nil {
+	if cmdRun(exec.Command("iptables", check...)) == nil {
 		return
 	}
 	ins := append([]string{"-w", "5", "-t", table, "-I", chain, "1"}, spec...)
@@ -240,7 +245,7 @@ func (t *Tunnel) startOpenVPN(dir string) error {
 		"--verb", "3",
 		"--log", logPath,
 	)
-	if err := cmd.Start(); err != nil {
+	if err := cmdStart(cmd); err != nil {
 		return fmt.Errorf("启动 openvpn 失败: %w", err)
 	}
 	t.ovpn = cmd
@@ -249,7 +254,7 @@ func (t *Tunnel) startOpenVPN(dir string) error {
 	// openvpn 建好 tun0 前 SOCKS5 无法正常出网，这里等它就绪
 	deadline := time.Now().Add(40 * time.Second)
 	for time.Now().Before(deadline) {
-		if out, err := exec.Command("ip", "netns", "exec", ns, "ip", "-4", "addr", "show", "tun0").Output(); err == nil {
+		if out, err := cmdOutput(exec.Command("ip", "netns", "exec", ns, "ip", "-4", "addr", "show", "tun0")); err == nil {
 			if strings.Contains(string(out), "inet ") {
 				return nil
 			}
@@ -323,8 +328,8 @@ func (t *Tunnel) setCredential(c SocksCred) {
 
 // probeExitIP 通过隧道查询出口 IP，用于确认这条隧道确实换了 IP。
 func (t *Tunnel) probeExitIP() (string, error) {
-	out, err := exec.Command("ip", "netns", "exec", t.nsName(),
-		"curl", "-s", "--max-time", "15", "http://api.ipify.org").Output()
+	out, err := cmdOutput(exec.Command("ip", "netns", "exec", t.nsName(),
+		"curl", "-s", "--max-time", "15", "http://api.ipify.org"))
 	if err != nil {
 		return "", fmt.Errorf("查询出口 IP 失败: %w", err)
 	}

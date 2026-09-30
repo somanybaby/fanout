@@ -245,7 +245,7 @@ func writeXrayConfig(dir string, cfg map[string]any) (string, error) {
 // 先校验再重启：配置写坏时进程会起不来，而那时旧进程已经被杀掉，
 // 所有节点链接会一起断掉。校验能把这类错误挡在重启之前。
 func verifyXrayConfig(bin, cfgPath string) error {
-	out, err := exec.Command(bin, "run", "-test", "-c", cfgPath).CombinedOutput()
+	out, err := cmdCombined(exec.Command(bin, "run", "-test", "-c", cfgPath))
 	if err != nil {
 		return fmt.Errorf("Xray 配置校验失败: %s", trimOutput(out))
 	}
@@ -281,7 +281,10 @@ func (p *xrayProc) restart(cfgPath string) error {
 	cmd := exec.Command(p.bin, "run", "-c", cfgPath)
 	cmd.Stdout = f
 	cmd.Stderr = f
-	if err := cmd.Start(); err != nil {
+	// 必须从母机的网络命名空间拉起：直接 Start 有概率把 Xray 拉进某条隧道，
+	// 那样入站端口只在隧道内部监听，母机上看不到，客户端全连不上
+	// 而进程、配置、日志三处都显示正常（见 netnsguard.go）
+	if err := cmdStart(cmd); err != nil {
 		f.Close()
 		return fmt.Errorf("启动 Xray 失败: %w", err)
 	}

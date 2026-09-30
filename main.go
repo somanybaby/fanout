@@ -44,6 +44,12 @@ func main() {
 		log.Fatalf("创建工作目录失败: %v", err)
 	}
 
+	// 先记下母机的网络命名空间，后面所有子进程都从这里起。
+	// 必须赶在建任何隧道之前，那之后线程就可能被带进隧道里了
+	if err := initMainNetns(); err != nil {
+		log.Fatal(err)
+	}
+
 	// 同一个工作目录只许跑一个实例：两份会共用 state.json 互相覆盖，隧道记录直接丢
 	unlock, err := lockWorkDir(*workDir)
 	if err != nil {

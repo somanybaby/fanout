@@ -14,14 +14,14 @@ func mgrWith(nodes []Node, running ...string) *Manager {
 const t_tmpdir = "/tmp"
 
 var sample = []Node{
-	{HostName: "jp1", CountryCode: "JP", Country: "Japan", SpeedMbps: 300, Ping: 10},
-	{HostName: "jp2", CountryCode: "JP", Country: "Japan", SpeedMbps: 200, Ping: 20},
-	{HostName: "kr1", CountryCode: "KR", Country: "Korea", SpeedMbps: 150, Ping: 30},
+	{HostName: "jp1", CountryCode: "JP", Country: "Japan", SpeedMbps: 300, Ping: 10, Residential: true},
+	{HostName: "jp2", CountryCode: "JP", Country: "Japan", SpeedMbps: 200, Ping: 20, Residential: true},
+	{HostName: "kr1", CountryCode: "KR", Country: "Korea", SpeedMbps: 150, Ping: 30, Residential: true},
 }
 
 func TestPickNodesSkipsRunning(t *testing.T) {
 	m := mgrWith(sample, "jp1")
-	got, err := m.pickNodes("JP", 2)
+	got, err := m.pickNodes("JP", 2, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func TestPickNodesSkipsRunning(t *testing.T) {
 
 func TestPickNodesRegionMismatch(t *testing.T) {
 	m := mgrWith(sample, "kr1")
-	if _, err := m.pickNodes("KR", 1); err == nil {
+	if _, err := m.pickNodes("KR", 1, nil); err == nil {
 		t.Fatal("KR 只有一个节点且已占用，应当报错")
 	}
 }

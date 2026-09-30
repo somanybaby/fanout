@@ -35,6 +35,57 @@ type Tunnel struct {
 	listener net.Listener
 	ovpn     *exec.Cmd
 	mu       sync.Mutex
+	// swapped 是这条出口换节点时用过的 hostname，按时间先后排。
+	// 手动换节点要避开它们：只排除"当前这个"的话，连点两次就会在
+	// 两个节点之间来回跳（A 换成 B，B 再换回 A）。
+	swapped []string
+}
+
+// swapHistoryMax 是换节点历史的上限。
+//
+// 留太多会把同地区的候选节点排干，反而让自动重连没得选；
+// 留太少又挡不住来回跳。一个地区的可用节点通常个位数到十几个，
+// 16 条足够覆盖"一轮都换过"的情况。
+const swapHistoryMax = 16
+
+// swapAvoid 返回换节点时要跳过的 hostname：历史用过的，加上当前这个。
+func (t *Tunnel) swapAvoid() map[string]bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make(map[string]bool, len(t.swapped)+1)
+	for _, h := range t.swapped {
+		out[h] = true
+	}
+	if t.Node.HostName != "" {
+		out[t.Node.HostName] = true
+	}
+	return out
+}
+
+// rememberSwap 把一个换掉的节点记进历史，超出上限就丢最早的。
+func (t *Tunnel) rememberSwap(host string) {
+	if host == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, h := range t.swapped {
+		if h == host {
+			return
+		}
+	}
+	t.swapped = append(t.swapped, host)
+	if len(t.swapped) > swapHistoryMax {
+		t.swapped = t.swapped[len(t.swapped)-swapHistoryMax:]
+	}
+}
+
+// forgetSwaps 清空换节点历史。同地区的节点都换过一轮之后要清一次，
+// 否则用户再点就只能收到"没有可用节点"。
+func (t *Tunnel) forgetSwaps() {
+	t.mu.Lock()
+	t.swapped = nil
+	t.mu.Unlock()
 }
 
 func (t *Tunnel) nsName() string { return fmt.Sprintf("fo%d", t.Slot) }

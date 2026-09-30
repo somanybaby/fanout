@@ -647,6 +647,14 @@ func (x *XUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 		return nil, err
 	}
 
+	// 别名撞了客户端会丢节点，先把面板里已有的备注收进来避让
+	takenRemarks := map[string]bool{}
+	if list, lerr := x.Inbounds(nil); lerr == nil {
+		for _, ib := range list {
+			takenRemarks[strings.TrimSpace(ib.Remark)] = true
+		}
+	}
+
 	created := []int{}
 	for _, host := range hosts {
 		t := byHost[host]
@@ -663,6 +671,11 @@ func (x *XUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 		clone, err := cloneInboundPayload(raw, port, t)
 		if err != nil {
 			return created, err
+		}
+		if remark, ok := clone["remark"].(string); ok {
+			unique := uniqueRemark(remark, takenRemarks)
+			clone["remark"] = unique
+			takenRemarks[unique] = true
 		}
 		newID, err := x.addInbound(clone)
 		if err != nil {
@@ -741,11 +754,7 @@ func cloneInboundPayload(tpl map[string]any, port int, t *Tunnel) (map[string]an
 		return nil, fmt.Errorf("解析模板 settings 失败: %w", err)
 	}
 
-	base := strings.TrimSpace(fmt.Sprint(tpl["remark"]))
 	label := exitLabel(t)
-	if base != "" {
-		label = base + "-" + label
-	}
 
 	// 客户端不重新生成：建成空入站后用 attach 把模板的客户端挂过来，
 	// 这样同一套 UUID 能走所有出口，客户端那边只改端口即可。
@@ -775,13 +784,10 @@ func cloneInboundPayload(tpl map[string]any, port int, t *Tunnel) (map[string]an
 	}, nil
 }
 
-// exitLabel 给复制出来的入站起个好认的名字：地区 + 出口 IP 末段。
+// exitLabel 给复制出来的入站起个好认的名字：国旗 + 中文国名 + 出口 IP 末段。
 // 同一地区可能有多条隧道，带上末段才能区分。
 func exitLabel(t *Tunnel) string {
-	region := t.Node.CountryCode
-	if region == "" {
-		region = t.Node.Country
-	}
+	place := nodeLabel(t.Node)
 
 	suffix := t.Node.HostName
 	if t.ExitIP != "" {
@@ -792,10 +798,12 @@ func exitLabel(t *Tunnel) string {
 		}
 	}
 
-	if region == "" {
+	if place == "" {
 		return suffix
 	}
-	return region + "-" + suffix
+	// 末段留着做区分：同一个国家可能开好几条出口，名字重了客户端会认不清，
+	// mihomo 那边甚至直接要求节点名唯一
+	return place + " " + suffix
 }
 
 // asObject 兼容字段是对象或是被编码成字符串的两种情况。
@@ -1198,7 +1206,7 @@ func (x *XUI) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) error {
 			return err
 		}
 		// 备注里带着旧出口的地区和 IP 尾段，换了节点要跟着改，否则名不副实
-		if renamed := renameExitSuffix(ib.Remark, newLabel); renamed != ib.Remark {
+		if renamed := renameExitLabel(ib.Remark, newLabel); renamed != ib.Remark {
 			if err := x.renameInbound(ib.ID, renamed); err != nil {
 				return err
 			}
@@ -1207,22 +1215,16 @@ func (x *XUI) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) error {
 	return nil
 }
 
-// renameExitSuffix 把备注末尾的出口标签换成新的。
-// 备注形如 "线路A-KR-248"，只替换最后两段；认不出格式时原样返回。
-func renameExitSuffix(remark, newLabel string) string {
-	if remark == "" {
+// renameExitLabel 在换节点之后把别名改成新出口的。
+//
+// 只改 fanout 自己起的名字（开头是国旗那种）。以前是按 "-" 切段替换末两段，
+// 既会把用户自己的备注切坏，又会在反复复制时叠成 "a-JP-243-VN-165" 这种。
+// 现在整体替换，用户手工改过的名字一律不碰。
+func renameExitLabel(remark, newLabel string) string {
+	if newLabel == "" || !isGeneratedLabel(remark) {
 		return remark
 	}
-	parts := strings.Split(remark, "-")
-	if len(parts) < 2 {
-		return remark
-	}
-	// 出口标签本身是 "地区-IP尾段" 两段，前面的是用户的原始备注
-	keep := parts[:len(parts)-2]
-	if len(keep) == 0 {
-		return newLabel
-	}
-	return strings.Join(keep, "-") + "-" + newLabel
+	return newLabel
 }
 
 // postJSON 向面板发一个 JSON 体的请求，并解析它统一的 success/msg 信封。

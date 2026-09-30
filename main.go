@@ -112,6 +112,10 @@ func main() {
 	mux.HandleFunc("/api/panel/client/del", apiClientDelete(mgr))
 	mux.HandleFunc("/api/panel/client/reset", apiClientReset(mgr))
 	mux.HandleFunc("/api/panel/mode", apiPanelMode(*workDir))
+	mux.HandleFunc("/api/sub", apiSub)
+	mux.HandleFunc("/api/sub/reset", apiSubReset)
+	// 订阅本体走免登录（见 auth.go 的放行），口令在 handleSub 里验
+	mux.HandleFunc("/sub", handleSub(mgr))
 
 	auth, created, err := NewAuth(*workDir)
 	if err != nil {
@@ -163,12 +167,28 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 func apiNodes(m *Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		nodes, fetched := m.Nodes()
+		total := len(nodes)
+		// 默认跟挑节点的口径一致：开了"只用家宽"就不列机房节点。
+		// 带 all=1 能看到完整列表，用来确认过滤掉了多少。
+		if residentialOnly() && r.URL.Query().Get("all") != "1" {
+			kept := make([]Node, 0, len(nodes))
+			for _, n := range nodes {
+				if n.Residential {
+					kept = append(kept, n)
+				}
+			}
+			nodes = kept
+		}
+		shown := len(nodes)
 		if len(nodes) > 200 {
 			nodes = nodes[:200]
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"nodes":   nodes,
-			"fetched": fetched,
+			"nodes":            nodes,
+			"fetched":          fetched,
+			"total":            total,
+			"available":        shown,
+			"residential_only": residentialOnly(),
 		})
 	}
 }
@@ -279,10 +299,11 @@ func apiCred(m *Manager) http.HandlerFunc {
 // GET 返回当前值（不含明文口令）；POST 按传入的字段逐项应用，任一项失败即整体回报。
 func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 	type settingsReq struct {
-		Password   *string `json:"password"`    // 非空则改口令
-		BasePath   *string `json:"base_path"`   // 提供即改访问路径（空串=去掉前缀）
-		Port       *int    `json:"port"`        // 提供即改监听端口
-		ListenAddr *string `json:"listen_addr"` // 提供即改监听地址
+		Password        *string `json:"password"`         // 非空则改口令
+		BasePath        *string `json:"base_path"`        // 提供即改访问路径（空串=去掉前缀）
+		Port            *int    `json:"port"`             // 提供即改监听端口
+		ListenAddr      *string `json:"listen_addr"`      // 提供即改监听地址
+		ResidentialOnly *bool   `json:"residential_only"` // 提供即改"只用家宽"
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
@@ -303,6 +324,14 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 			if in.BasePath != nil {
 				if _, err := setBasePath(*in.BasePath); err != nil {
 					writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+					return
+				}
+			}
+			// 改"只用家宽"。放在改端口之前：applyWebSettings 会整份覆盖设置，
+			// 顺序颠倒会把这个开关写回旧值。
+			if in.ResidentialOnly != nil {
+				if err := setResidentialOnly(*in.ResidentialOnly); err != nil {
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 					return
 				}
 			}
@@ -328,11 +357,12 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 			listen = "0.0.0.0"
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"base_path":    currentBasePath(),
-			"port":         cfg.Port,
-			"listen_addr":  listen,
-			"has_password": true,
-			"version":      version,
+			"base_path":        currentBasePath(),
+			"port":             cfg.Port,
+			"listen_addr":      listen,
+			"has_password":     true,
+			"residential_only": cfg.residentialOnly(),
+			"version":          version,
 		})
 	}
 }
@@ -395,6 +425,7 @@ func apiProvision(m *Manager) http.HandlerFunc {
 		}
 		job, err := m.Provision(ProvisionRequest{
 			Region: q.Get("region"), Count: count, TemplateID: tpl,
+			EveryRegion: q.Get("every") == "1",
 		})
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})

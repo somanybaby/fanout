@@ -90,12 +90,50 @@ func TestShareLinkPerProtocol(t *testing.T) {
 	}
 }
 
-func TestCloneRemark(t *testing.T) {
-	if got := cloneRemark("线路A", "JP-244"); got != "线路A-JP-244" {
-		t.Errorf("cloneRemark = %q", got)
+// 复制出来的入站直接叫出口的名字，不再拼模板备注。
+// 以前拼接会在"拿复制品当模板再复制"时叠成 fanout-JP-243-VN-165 这种。
+func TestUniqueRemark(t *testing.T) {
+	taken := map[string]bool{}
+	if got := uniqueRemark("🇯🇵 日本 54", taken); got != "🇯🇵 日本 54" {
+		t.Errorf("没撞名时应原样返回，实际 %q", got)
 	}
-	if got := cloneRemark("", "JP-244"); got != "JP-244" {
-		t.Errorf("空备注时应直接用标签，实际 %q", got)
+	taken["🇯🇵 日本 54"] = true
+	// 同一条出口挂第二个节点时要加序号，mihomo 那边名字重了会丢节点
+	if got := uniqueRemark("🇯🇵 日本 54", taken); got != "🇯🇵 日本 54 2" {
+		t.Errorf("撞名应加序号，实际 %q", got)
+	}
+	taken["🇯🇵 日本 54 2"] = true
+	if got := uniqueRemark("🇯🇵 日本 54", taken); got != "🇯🇵 日本 54 3" {
+		t.Errorf("第三个应是 3，实际 %q", got)
+	}
+}
+
+// 换节点只改 fanout 自己起的名字，用户手工改过的不碰。
+func TestRenameExitLabel(t *testing.T) {
+	if got := renameExitLabel("🇯🇵 日本 54", "🇰🇷 韩国 15"); got != "🇰🇷 韩国 15" {
+		t.Errorf("自动名应整体换掉，实际 %q", got)
+	}
+	for _, mine := range []string{"线路A", "给老王的", "JP-244", ""} {
+		if got := renameExitLabel(mine, "🇰🇷 韩国 15"); got != mine {
+			t.Errorf("手工备注 %q 不该被改成 %q", mine, got)
+		}
+	}
+	// 新名字算不出来时别把原来的抹掉
+	if got := renameExitLabel("🇯🇵 日本 54", ""); got != "🇯🇵 日本 54" {
+		t.Errorf("新标签为空时应保持原样，实际 %q", got)
+	}
+}
+
+func TestIsGeneratedLabel(t *testing.T) {
+	for _, s := range []string{"🇯🇵 日本 54", "🇺🇸 美国 1", " 🇰🇷 韩国 15"} {
+		if !isGeneratedLabel(s) {
+			t.Errorf("%q 是自动生成的名字", s)
+		}
+	}
+	for _, s := range []string{"", "线路A", "JP-244", "fanout-JP-243", "日本 54"} {
+		if isGeneratedLabel(s) {
+			t.Errorf("%q 不是自动生成的名字", s)
+		}
 	}
 }
 

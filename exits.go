@@ -108,7 +108,7 @@ func (m *Manager) ExitsOf() ExitsView {
 		cred := t.credential()
 		view.Exits = append(view.Exits, Exit{
 			Slot: t.Slot, Port: t.Port, Host: t.Node.HostName,
-			Region: t.Node.CountryCode, Country: t.Node.Country,
+			Region: t.Node.CountryCode, Country: nodeLabel(t.Node),
 			ExitIP: t.ExitIP, Status: t.Status, Err: t.Err, Since: t.Since,
 			SocksUser: cred.User, SocksPass: cred.Pass,
 		})

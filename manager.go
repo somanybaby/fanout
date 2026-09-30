@@ -171,7 +171,7 @@ func (m *Manager) bringUpPersist(t *Tunnel, notify bool, persist bool) {
 func (m *Manager) tryCandidates(t *Tunnel, notify bool) bool {
 	// VPN Gate 是志愿者节点，列表里有相当比例已下线或满员（AUTH_FAILED），
 	// 连不上就顺着候选列表换下一个，不必让用户手动试。
-	candidates := m.candidatesFor(t.Node)
+	candidates := m.candidatesFor(t)
 	for i, node := range candidates {
 		if !m.tunnelActive(t) {
 			return false
@@ -237,15 +237,22 @@ func (m *Manager) tryNode(t *Tunnel) error {
 	return nil
 }
 
-// candidatesFor 以指定节点打头，后面跟上同地区的其他节点作为备选。
-func (m *Manager) candidatesFor(first Node) []Node {
+// candidatesFor 以这条隧道当前的节点打头，后面跟上同地区的其他节点作为备选。
+//
+// 打头的一定是 t.Node：自动重连的目标是把这条出口恢复原样，先试原节点。
+// 备选会避开用户手动换掉过的节点——那些是他明确不想要的 IP，
+// 让重连悄悄换回去等于撤销了他的操作。
+func (m *Manager) candidatesFor(t *Tunnel) []Node {
 	const maxTries = 6
+	first := t.Node
+	avoid := t.swapAvoid()
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	used := map[string]bool{first.HostName: true}
-	for _, t := range m.tunnels {
-		used[t.Node.HostName] = true
+	for _, other := range m.tunnels {
+		used[other.Node.HostName] = true
 	}
 
 	// 地区决定了备选范围，缺失时先从当前列表补一次，
@@ -261,11 +268,11 @@ func (m *Manager) candidatesFor(first Node) []Node {
 	}
 
 	out := []Node{first}
-	for _, n := range m.nodes {
+	for _, n := range m.nodePoolLocked() {
 		if len(out) >= maxTries {
 			break
 		}
-		if used[n.HostName] {
+		if used[n.HostName] || avoid[n.HostName] {
 			continue
 		}
 		// 地区实在拿不到时不做限制，总比连不上强
@@ -301,6 +308,10 @@ func (m *Manager) Stop(slot int) error {
 //
 // 与健康检查的自动重连不同：那边优先重连原节点（目标是恢复），
 // 这里用户是嫌当前出口 IP 不好用，必须真的换一个。
+//
+// 换过的节点会记进历史一并避开。只排除"当前这个"是不够的：
+// A 换成 B 之后 A 就空出来了，而候选是按速度排的，A 往往又排在最前面，
+// 于是再点一次就换回了 A。历史让每次点击都真的换一个没用过的。
 func (m *Manager) Swap(slot int) error {
 	m.mu.RLock()
 	t, ok := m.tunnels[slot]
@@ -312,15 +323,36 @@ func (m *Manager) Swap(slot int) error {
 		return fmt.Errorf("这个出口正在连接中，稍等一下")
 	}
 
-	// pickNodes 已排除所有在用节点，拿到的必然不是当前这个
-	picks, err := m.pickNodes(t.Node.CountryCode, 1)
+	node, err := m.pickSwapTarget(t)
 	if err != nil {
 		return err
 	}
 	oldHost := t.Node.HostName
-	t.Node = picks[0]
+	t.Node = node
 	m.reconnect(t, oldHost)
 	return nil
+}
+
+// pickSwapTarget 给"换节点"挑下一个目标，并把该跳过的节点记进历史。
+//
+// 记两个：换下来的那个，以及刚挑中的这个。挑中的也记是因为真机上踩到过——
+// 它连不上时会被候选列表换成别人，但它自己没进历史，
+// 于是下次点换节点又从它开始试一遍，白等一轮握手超时。
+func (m *Manager) pickSwapTarget(t *Tunnel) (Node, error) {
+	avoid := t.swapAvoid()
+	picks, err := m.pickNodes(t.Node.CountryCode, 1, avoid)
+	if err != nil && len(avoid) > 1 {
+		// 这个地区的节点都换过一轮了。清掉历史重新开始，
+		// 总比告诉用户"没得换了"好——转一圈之后原来那些节点未必还是当初的状态。
+		t.forgetSwaps()
+		picks, err = m.pickNodes(t.Node.CountryCode, 1, t.swapAvoid())
+	}
+	if err != nil {
+		return Node{}, err
+	}
+	t.rememberSwap(t.Node.HostName)
+	t.rememberSwap(picks[0].HostName)
+	return picks[0], nil
 }
 
 // StopAll 停掉所有隧道并清空状态文件。

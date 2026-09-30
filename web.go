@@ -214,6 +214,10 @@ textarea:focus{outline:none;border-color:var(--accent)}
     <h2>出口</h2>
     <span class="count" id="ecount"></span>
     <span class="spacer"></span>
+    <button id="subBtn" title="拿订阅地址">
+      <svg viewBox="0 0 24 24"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/></svg>
+      订阅
+    </button>
     <button id="exportAll" title="导出全部节点链接">
       <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
       导出链接
@@ -253,7 +257,7 @@ textarea:focus{outline:none;border-color:var(--accent)}
         <div class="regions" id="regions" style="margin-top:6px"></div>
       </label>
       <label class="f">
-        <span>数量</span>
+        <span id="countlabel">数量</span>
         <div class="stepper">
           <button id="minus" title="减少">
             <svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg>
@@ -429,6 +433,31 @@ textarea:focus{outline:none;border-color:var(--accent)}
   </div>
 </div>
 
+<div class="modal" id="subbox">
+  <div class="sheet">
+    <div class="head">
+      <h2>订阅</h2>
+      <span class="count" id="subcount"></span>
+      <span class="spacer"></span>
+      <button class="icon" data-close="subbox" title="关闭">
+        <svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+    <div class="body">
+      <label class="f"><span>订阅地址</span>
+        <input id="suburl" type="text" spellcheck="false" readonly></label>
+      <div class="hint">客户端里新建订阅填这条。以后加出口、删出口都会自己跟上，不用重新配。</div>
+      <div class="hint bad">地址最后那串口令等于密码，别发群里。</div>
+      <div class="hint">想看明文而不是 base64，地址后面加 <code>&amp;target=links</code>。</div>
+    </div>
+    <div class="foot">
+      <span class="spacer"></span>
+      <button id="subreset">换一串口令</button>
+      <button class="primary" id="subcopy">复制地址</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="settings">
   <div class="sheet">
     <div class="head">
@@ -450,6 +479,9 @@ textarea:focus{outline:none;border-color:var(--accent)}
       <label class="f" style="margin-top:16px"><span>节点后端</span>
         <select id="setBackend"></select></label>
       <div class="hint" id="setBackendHint">节点从哪来。装了 3x-ui 或 xray-cf-lite 就能直接接管，都没有就用自建。</div>
+
+      <label class="chk" style="margin-top:16px"><input type="checkbox" id="setResi"> 只用家宽节点</label>
+      <div class="hint" id="setResiHint">vpngate 里混着一批它自己的机房机器，出口一眼看得出是数据中心。勾着就只挑志愿者家宽。</div>
 
       <div class="setrow">
         <label class="f" style="margin:0"><span>监听端口</span>
@@ -576,9 +608,8 @@ function renderExits(){
       : '<span class="chip none">无节点</span>';
     const err = e.status === 'failed' && e.err
       ? '<div class="errline" title="' + esc(e.err) + '">' + esc(e.err) + '</div>' : '';
-    // 国家码和全名一起显示是冗余的，只在两者确实不同时才补全名
-    const place = e.country && e.country.toUpperCase() !== (e.region || '').toUpperCase()
-      ? esc(e.region) + ' ' + esc(e.country) : esc(e.region || '—');
+    // country 后端已经给成"国旗 中文"，再拼国家码就重复了
+    const place = esc(e.country || e.region || '—');
     return '<div class="exit">'
       + '<div class="row">'
       +   '<span class="dot ' + e.status + '" title="' + (STATUS[e.status] || e.status) + '"></span>'
@@ -682,9 +713,11 @@ function renderRegions(){
   const list = regions.filter(r => !kw
     || r.code.toLowerCase().includes(kw) || r.name.toLowerCase().includes(kw));
   $('#regions').innerHTML = ['<button class="rg' + (region === '' ? ' sel' : '')
-      + '" data-rg=""><b>不限地区</b><em>速度优先</em></button>']
+      + '" data-rg=""><b>不限地区</b><em>速度优先</em></button>',
+    '<button class="rg' + (region === '*' ? ' sel' : '')
+      + '" data-rg="*"><b>每个国家</b><em>' + regions.length + ' 个国家各来几个</em></button>']
     .concat(list.map(r => '<button class="rg' + (region === r.code ? ' sel' : '')
-      + '" data-rg="' + esc(r.code) + '"><b>' + esc(r.code) + ' ' + esc(r.name) + '</b>'
+      + '" data-rg="' + esc(r.code) + '"><b>' + esc(r.name || r.code) + '</b>'
       + '<em>' + r.available + ' 个空闲 · ' + r.best_speed_mbps.toFixed(0) + ' Mbps</em></button>'))
     .join('');
   updateAvail();
@@ -692,14 +725,27 @@ function renderRegions(){
 
 function availOf(code){
   if(code === '') return regions.reduce((a, r) => a + r.available, 0);
+  if(code === '*') return regions.reduce((a, r) => a + r.available, 0);
   const r = regions.find(x => x.code === code);
   return r ? r.available : 0;
 }
 
 function updateAvail(){
-  const avail = availOf(region);
   const want = Number($('#count').value) || 0;
   const hint = $('#availhint');
+  // 选了"每个国家"时，数量的意思是每国几个，提示要给出总条数
+  $('#countlabel').textContent = region === '*' ? '每个国家几个' : '数量';
+  if(region === '*'){
+    const n = regions.length;
+    const total = Math.min(n * want, availOf('*'));
+    hint.className = 'hint';
+    hint.textContent = n
+      ? n + ' 个国家 × ' + want + '，一共 ' + total + ' 条出口'
+      : '还没有可用节点';
+    $('#go').disabled = !n || !want;
+    return;
+  }
+  const avail = availOf(region);
   hint.textContent = avail ? '可用 ' + avail + ' 个节点' : '这个地区没有空闲节点';
   hint.className = 'hint' + (want > avail ? ' bad' : '');
   if(want > avail && avail) hint.textContent = '只剩 ' + avail + ' 个，将全部使用';
@@ -753,7 +799,12 @@ document.addEventListener('click', e => {
     if(!regionsLoaded) loadWizard(); else { renderRegions(); loadWizard(); }
   }
   const rg = e.target.closest('[data-rg]');
-  if(rg){ region = rg.dataset.rg; renderRegions(); }
+  if(rg){
+    region = rg.dataset.rg;
+    // "每个国家"是批量，默认每国 1 个，免得一点就开出几十条
+    if(region === '*' && Number($('#count').value) > 3) $('#count').value = '1';
+    renderRegions();
+  }
 });
 
 // ---- 新建节点 ----
@@ -843,7 +894,8 @@ $('#go').onclick = async e => {
   const tpl = $('#tpl').value || '0';
   e.target.disabled = true;
   try{
-    await api('/api/provision?count=' + want + '&region=' + encodeURIComponent(region)
+    await api('/api/provision?count=' + want
+      + (region === '*' ? '&every=1' : '&region=' + encodeURIComponent(region))
       + '&template=' + tpl, {method:'POST'});
     closeModal('wizard');
     poll();
@@ -939,7 +991,7 @@ function exitOptions(currentHost){
   return '<option value=""' + (currentHost ? '' : ' selected') + '>直连（不走隧道）</option>'
     + up.map(e => '<option value="' + esc(e.host) + '"'
         + (e.host === currentHost ? ' selected' : '') + '>'
-        + esc((e.exit_ip || e.host) + ' · ' + e.region) + '</option>').join('');
+        + esc((e.exit_ip || e.host) + ' · ' + (e.country || e.region)) + '</option>').join('');
 }
 
 function renderDetail(d){
@@ -1113,7 +1165,7 @@ function openCred(slot){
   const e = view.exits.find(x => x.slot === slot);
   if(!e){ toast('这个出口不在了', true); return; }
   curCred = {slot: slot, port: e.port, host: credHost(e)};
-  $('#crtitle').textContent = e.region + ' · :' + e.port;
+  $('#crtitle').textContent = (e.country || e.region) + ' · :' + e.port;
   $('#cruser').value = e.socks_user || '';
   $('#crpass').value = e.socks_pass || '';
   refreshCredURL();
@@ -1174,6 +1226,32 @@ $('#exportAll').onclick = async () => {
 };
 $('#copyall').onclick = () => { const v = $('#exbox').value; if(v) copy(v); };
 
+// ---- 订阅 ----
+// 地址用 location.origin 拼：后端给的是访问路径下的相对部分，
+// 这样反代、改端口、换路径之后拿到的都是用户此刻真正能访问的地址。
+async function showSub(d){
+  $('#suburl').value = location.origin + d.path;
+  const n = view ? view.exits.flatMap(x => (x.inbounds || [])).length : 0;
+  $('#subcount').textContent = n ? n + ' 个节点' : '还没有节点，先开出口再建节点链接';
+}
+$('#subBtn').onclick = async () => {
+  $('#suburl').value = '读取中…';
+  $('#subcount').textContent = '';
+  openModal('subbox');
+  try{ showSub(await api('/api/sub')); }
+  catch(err){ $('#suburl').value = '读取失败: ' + err.message; }
+};
+$('#subcopy').onclick = () => { const v = $('#suburl').value; if(v) copy(v); };
+$('#subreset').onclick = async e => {
+  if(!confirm('换一串口令？旧地址立刻失效，已经配过的客户端要重新填一次。')) return;
+  e.target.disabled = true;
+  try{
+    showSub(await api('/api/sub/reset', {method:'POST'}));
+    toast('已换新地址');
+  }catch(err){ toast(err.message, true); }
+  e.target.disabled = false;
+};
+
 // ---- 设置：改密码 / 改路径 / 改端口 / 改本地监听 ----
 let curSettings = null;
 let curBackend = null;
@@ -1212,6 +1290,7 @@ $('#settingsBtn').onclick = async () => {
     $('#setPath').value = (s.base_path || '').replace(/^\//, '');
     $('#setPort').value = s.port || '';
     $('#setListen').value = s.listen_addr || '0.0.0.0';
+    $('#setResi').checked = s.residential_only !== false;
     $('#setPathHint').textContent = '界面挂在这个路径下，扫端口的探不到。只能用字母数字和 - _。';
     $('#updCur').textContent = s.version || '-';
     $('#updLatest').textContent = '';
@@ -1285,6 +1364,7 @@ $('#setSave').onclick = async e => {
   const port = parseInt($('#setPort').value.trim(), 10);
   if(port) body.port = port;
   body.listen_addr = $('#setListen').value;
+  body.residential_only = $('#setResi').checked;
 
   const portChanged = curSettings && (port !== curSettings.port
     || body.listen_addr !== (curSettings.listen_addr || '0.0.0.0'));

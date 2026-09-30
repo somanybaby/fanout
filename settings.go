@@ -11,14 +11,41 @@ import (
 	"sync"
 )
 
-// WebSettings 是管理界面自身的可改配置：监听端口、监听地址（本地/全接口）。
-// 落盘持久化，界面改完重启监听即时生效。访问口令与访问路径各有专门的文件
-// （password / basepath），不放这里，但都能在设置面板里改。
+// WebSettings 是落盘的可改配置：管理界面的监听端口与地址，外加几个功能开关。
+// 界面改完即时生效。访问口令与访问路径各有专门的文件（password / basepath），
+// 不放这里，但都能在设置面板里改。
 type WebSettings struct {
 	// Port 是管理界面监听端口。
 	Port int `json:"port"`
 	// ListenAddr 是监听地址：空或 0.0.0.0 表示所有网卡；127.0.0.1 表示只本机。
 	ListenAddr string `json:"listen_addr"`
+	// ResidentialOnly 决定挑节点时是否只用志愿者家宽，跳过 vpngate 自营机房。
+	// 用指针是为了区分"没配过"和"明确关掉"：老版本升上来的配置文件里没有这个
+	// 字段，nil 按默认的开启处理。
+	ResidentialOnly *bool `json:"residential_only,omitempty"`
+	// SubToken 是订阅地址里的口令。订阅要免登录才能被客户端拉取，
+	// 所以这串就是它唯一的门槛，等同于密码，不要外传。
+	SubToken string `json:"sub_token,omitempty"`
+}
+
+// residentialOnly 返回"只用家宽"是否开启。没配过时默认开：
+// fanout 存在的意义就是把家宽扇成出口，机房 IP 对用户没价值。
+func (s WebSettings) residentialOnly() bool {
+	if s.ResidentialOnly == nil {
+		return true
+	}
+	return *s.ResidentialOnly
+}
+
+// residentialOnly 是给业务代码用的简写，省掉每处都去取一遍设置。
+func residentialOnly() bool { return getWebSettings().residentialOnly() }
+
+// setResidentialOnly 改"只用家宽"开关并落盘。
+func setResidentialOnly(v bool) error {
+	webSettingsMu.Lock()
+	webSettingsCur.ResidentialOnly = &v
+	webSettingsMu.Unlock()
+	return saveWebSettings()
 }
 
 var (

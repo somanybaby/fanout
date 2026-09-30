@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"sort"
@@ -46,6 +47,37 @@ type Node struct {
 	SpeedMbps   float64 `json:"speed_mbps"`
 	Sessions    int     `json:"sessions"`
 	Config      string  `json:"-"` // 解码后的 .ovpn 内容
+	// Residential 表示这是志愿者的家庭宽带，不是 VPN Gate 自己的机房服务器。
+	Residential bool `json:"residential"`
+}
+
+// vpngate 自营服务器所在的网段。这些是学术网络里的机房机器，
+// 不是志愿者家宽：出口 IP 一眼能看出来是数据中心，而且更容易满员。
+var vpngateOwnNets = []string{"219.100.37.0/24"}
+
+// isResidential 判断一个节点是不是志愿者家宽。
+//
+// 两条判据都是实测出来的：
+//   - hostname 以 public-vpn- 开头的是 vpngate 自营服务器
+//   - 219.100.37.0/24 段同样是自营（学术网络机房）
+//
+// 剩下的是志愿者用自家宽带跑的，出口 IP 属于普通运营商。
+func isResidential(hostName, ip string) bool {
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(hostName)), "public-vpn-") {
+		return false
+	}
+	addr := net.ParseIP(strings.TrimSpace(ip))
+	if addr == nil {
+		// IP 解析不出来时不敢断言，按家宽放过，让连通性测试去淘汰
+		return true
+	}
+	for _, cidr := range vpngateOwnNets {
+		_, block, err := net.ParseCIDR(cidr)
+		if err == nil && block.Contains(addr) {
+			return false
+		}
+	}
+	return true
 }
 
 // fetchNodes 拉取并解析 VPN Gate 的节点列表。
@@ -153,6 +185,7 @@ func parseNodeCSV(body string) ([]Node, error) {
 		nodes = append(nodes, Node{
 			HostName:    get("HostName"),
 			IP:          get("IP"),
+			Residential: isResidential(get("HostName"), get("IP")),
 			Country:     get("CountryLong"),
 			CountryCode: get("CountryShort"),
 			Ping:        ping,

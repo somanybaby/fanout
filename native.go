@@ -198,7 +198,7 @@ func (n *Native) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) error
 		}
 		ib.BoundTo = newTag
 		// 备注里带着旧出口的地区和 IP 尾段，换了节点要跟着改
-		ib.Remark = renameExitSuffix(ib.Remark, newLabel)
+		ib.Remark = renameExitLabel(ib.Remark, newLabel)
 	}
 	return n.apply(tunnels)
 }
@@ -227,6 +227,11 @@ func (n *Native) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunne
 	}
 
 	used := n.store.usedPorts()
+	// 别名撞了客户端会丢节点，先把已有备注收进来避让
+	takenRemarks := map[string]bool{}
+	for _, ib := range n.store.Inbounds {
+		takenRemarks[strings.TrimSpace(ib.Remark)] = true
+	}
 	created := []int{}
 	for _, host := range hosts {
 		t := byHost[host]
@@ -238,6 +243,9 @@ func (n *Native) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunne
 			return created, err
 		}
 		used[port] = true
+
+		remark := uniqueRemark(exitLabel(t), takenRemarks)
+		takenRemarks[remark] = true
 
 		clone := &nativeInbound{
 			ID:       n.store.NextID,
@@ -251,7 +259,7 @@ func (n *Native) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunne
 			Security: tpl.Security,
 			TLS:      tpl.TLS,
 			Reality:  tpl.Reality,
-			Remark:   cloneRemark(tpl.Remark, exitLabel(t)),
+			Remark:   remark,
 			Enable:   true,
 			Clients:  append([]nativeClient(nil), tpl.Clients...),
 			BoundTo:  sanitizeTag(t.Node.HostName),
@@ -504,15 +512,6 @@ func (n *Native) CreateInbound(spec NewInboundSpec, tunnels []*Tunnel) (*Created
 		Network:  ib.netOrTCP(),
 		Security: ib.securityOrNone(),
 	}, nil
-}
-
-// cloneRemark 给复制出来的入站起名，与 3x-ui 模式同一套规则。
-func cloneRemark(base, label string) string {
-	base = strings.TrimSpace(base)
-	if base == "" {
-		return label
-	}
-	return base + "-" + label
 }
 
 // shareLink 生成客户端可直接导入的分享链接。

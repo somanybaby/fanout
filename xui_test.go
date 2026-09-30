@@ -7,18 +7,26 @@ import (
 	"testing"
 )
 
-func TestRenameExitSuffix(t *testing.T) {
+// 换节点改名：只动 fanout 自己起的名字。
+//
+// 旧实现按 "-" 切段替换末两段，既会切坏用户自己的备注，
+// 又会在"拿复制品当模板再复制"时叠成 fanout-JP-243-VN-165 这种。
+func TestRenameExitLabelOnlyTouchesGenerated(t *testing.T) {
 	cases := []struct{ remark, label, want string }{
-		{"KR-248", "JP-132", "JP-132"},
-		{"线路A-KR-248", "JP-132", "线路A-JP-132"},
-		{"inbound-47525-KR-248", "JP-132", "inbound-47525-JP-132"},
-		{"无格式", "JP-132", "无格式"},
-		{"", "JP-132", ""},
+		// fanout 起的名字：整体换掉
+		{"🇰🇷 韩国 248", "🇯🇵 日本 132", "🇯🇵 日本 132"},
+		{"🇰🇷 韩国 248 2", "🇯🇵 日本 132", "🇯🇵 日本 132"},
+		// 用户自己起的：一律不碰，包括旧版本留下来的那些
+		{"线路A", "🇯🇵 日本 132", "线路A"},
+		{"线路A-KR-248", "🇯🇵 日本 132", "线路A-KR-248"},
+		{"fanout-JP-243-VN-165", "🇯🇵 日本 132", "fanout-JP-243-VN-165"},
+		{"无格式", "🇯🇵 日本 132", "无格式"},
+		{"", "🇯🇵 日本 132", ""},
 	}
 	for _, c := range cases {
-		got := renameExitSuffix(c.remark, c.label)
+		got := renameExitLabel(c.remark, c.label)
 		if got != c.want {
-			t.Errorf("renameExitSuffix(%q) = %q, want %q", c.remark, got, c.want)
+			t.Errorf("renameExitLabel(%q) = %q, want %q", c.remark, got, c.want)
 		}
 	}
 }

@@ -147,6 +147,12 @@ func (a *Auth) Wrap(next http.Handler) http.Handler {
 			a.handleLogin(w, r)
 			return
 		}
+		// 订阅得让客户端直接拉，带不了登录态，所以这条路放行。
+		// 它不是无门槛：handleSub 自己校验一串独立口令，且仍在访问路径之后。
+		if r.URL.Path == "/sub" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if c, err := r.Cookie(sessionCookie); err == nil && a.valid(c.Value) {
 			next.ServeHTTP(w, r)
 			return

@@ -636,7 +636,7 @@ function renderOrphans(){
   if(!list.length){ box.innerHTML = ''; return; }
   const hasUp = view.exits.some(e => e.status === 'up');
   box.innerHTML = '<div class="orphan"><div class="top">'
-    + '<h3>未绑定出口的入站</h3><span class="count">' + list.length + ' 个，走直连</span>'
+    + '<h3>未挂到活动出口的入站</h3><span class="count">' + list.length + ' 个</span>'
     + '<span class="spacer"></span>'
     + (isXCL() ? ''
         : '<button data-delorphans="1" title="删除这些入站">' + ICON.trash + '清理</button>')
@@ -646,6 +646,7 @@ function renderOrphans(){
         + '<button class="chip" data-detail="' + i.id + '" title="'
         +   esc((i.remark || i.protocol) + ' · ' + i.protocol + ' :' + i.port) + '">'
         +   esc(i.remark || i.protocol) + ' :' + i.port + '</button>'
+        + '<span class="meta">' + (i.bound_to?'家宽离线，已阻断':i.protected?'原直连，已保护':'直连') + '</span>'
         + '<span class="spacer"></span>'
         + (hasUp
             ? '<select class="obind" data-tag="' + esc(i.tag) + '">' + exitOptions('') + '</select>'
@@ -940,7 +941,8 @@ document.addEventListener('click', async e => {
   }
   const del = e.target.closest('[data-delorphans]');
   if(del){
-    const list = view.direct || [];
+    const list = (view.direct || []).filter(i=>!i.protected);
+    if(!list.length){toast('原直连节点已保护');return;}
     if(!confirm('删除这 ' + list.length + ' 个未绑定节点？此操作不可撤销。')) return;
     del.disabled = true;
     try{

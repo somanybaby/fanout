@@ -1,6 +1,6 @@
 # Fanout 自有维护版本
 
-基于 [byJoey/fanout v1.3.1](https://github.com/byJoey/fanout/tree/v1.3.1) 二次修改，保留原许可证和提交历史。自有更新渠道：[somanybaby/fanout Releases](https://github.com/somanybaby/fanout/releases)。当前维护版本：v1.4.0。
+基于 [byJoey/fanout v1.3.1](https://github.com/byJoey/fanout/tree/v1.3.1) 二次修改，保留原许可证和提交历史。自有更新渠道：[somanybaby/fanout Releases](https://github.com/somanybaby/fanout/releases)。当前维护版本：v1.4.1。
 
 - **日本优先，多国保留**：新建出口首次默认日本；不限地区、每个国家及其他国家选择均保留。没有日本可选时仍能选择其他国家。
 - **扩充真实国家覆盖**：官方 CSV 与原备用来源照常使用；每 30 分钟刷新并保留 6 小时内的节点目录，减少低频国家随一次刷新消失。设置页支持可信 HTTPS VPN Gate CSV 补充来源。缓存不保证在线，地区数量由真实来源决定。

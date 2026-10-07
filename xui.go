@@ -335,6 +335,11 @@ func (x *XUI) saveXray(setting map[string]any, testURL string) error {
 	if equalJSON(old, setting) && oldURL == testURL {
 		return nil
 	}
+	if !onlyHotFieldsChanged(old, setting) {
+		return fmt.Errorf("拒绝修改家宽路由以外的全局 Xray 设置")
+	}
+	hotAPI := knownSynchronousHotAPI()
+	pids := corePIDs()
 	if err := x.validateTemplate(setting); err != nil {
 		return err
 	}
@@ -352,6 +357,12 @@ func (x *XUI) saveXray(setting map[string]any, testURL string) error {
 	}
 	if err := write(setting, testURL); err != nil {
 		return err
+	}
+	if hotAPI && len(pids) == 1 && equalJSON(pids, corePIDs()) {
+		applied, _, err := x.loadXray()
+		if err == nil && equalJSON(applied, setting) {
+			return nil
+		}
 	}
 	for i := 0; i < 20; i++ {
 		if runtimeMatchesTemplate(setting) {

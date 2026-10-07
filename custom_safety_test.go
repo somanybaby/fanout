@@ -93,3 +93,21 @@ func TestTemplateRuntimeMatchesEquivalentJSONNumbers(t *testing.T) {
 		t.Fatal("different routing incorrectly accepted")
 	}
 }
+
+func TestHotUpdateRejectsUnrelatedGlobalChanges(t *testing.T) {
+	old := map[string]any{"dns": map[string]any{"servers": []any{"1.1.1.1"}}, "routing": map[string]any{"rules": []any{}}}
+	next := map[string]any{"dns": old["dns"], "routing": map[string]any{"rules": []any{"changed"}}}
+	if !onlyHotFieldsChanged(old, next) {
+		t.Fatal("routing-only change rejected")
+	}
+	next["dns"] = map[string]any{"servers": []any{"8.8.8.8"}}
+	if onlyHotFieldsChanged(old, next) {
+		t.Fatal("unrelated DNS change allowed")
+	}
+	if !coreCommand([]byte("bin/xray-linux-amd64\x00-c\x00bin/config.json\x00")) {
+		t.Fatal("panel core not identified")
+	}
+	if coreCommand([]byte("xray\x00-c\x00/var/lib/fanout/diagnostic/client.json\x00")) {
+		t.Fatal("temporary diagnostic mistaken for panel core")
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,7 +26,9 @@ type WebSettings struct {
 	ResidentialOnly *bool `json:"residential_only,omitempty"`
 	// SubToken 是订阅地址里的口令。订阅要免登录才能被客户端拉取，
 	// 所以这串就是它唯一的门槛，等同于密码，不要外传。
-	SubToken string `json:"sub_token,omitempty"`
+	SubToken            string   `json:"sub_token,omitempty"`
+	AdditionalSources   []string `json:"additional_sources,omitempty"`
+	ProtectedInboundIDs []int    `json:"protected_inbound_ids,omitempty"`
 }
 
 // residentialOnly 返回"只用家宽"是否开启。没配过时默认开：
@@ -138,4 +141,30 @@ func validatePort(p int) error {
 // listenAddrString 拼出 net.Listen 用的地址串。
 func (s WebSettings) listenAddrString() string {
 	return net.JoinHostPort(s.ListenAddr, strconv.Itoa(s.Port))
+}
+
+func setAdditionalSources(sources []string) error {
+	if len(sources) > 8 {
+		return fmt.Errorf("最多配置 8 个补充来源")
+	}
+	cleaned := []string{}
+	seen := map[string]bool{}
+	for _, source := range sources {
+		source = strings.TrimSpace(source)
+		if source == "" {
+			continue
+		}
+		u, err := url.Parse(source)
+		if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.Fragment != "" {
+			return fmt.Errorf("补充来源必须是可信的 HTTPS VPN Gate CSV 地址")
+		}
+		if !seen[source] {
+			cleaned = append(cleaned, source)
+			seen[source] = true
+		}
+	}
+	webSettingsMu.Lock()
+	webSettingsCur.AdditionalSources = cleaned
+	webSettingsMu.Unlock()
+	return saveWebSettings()
 }

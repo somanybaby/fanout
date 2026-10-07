@@ -28,9 +28,11 @@ type Exit struct {
 	Err     string    `json:"err,omitempty"`
 	Since   time.Time `json:"since"`
 	// SOCKS5 凭据：界面要能看、能复制、能改
-	SocksUser string        `json:"socks_user"`
-	SocksPass string        `json:"socks_pass"`
-	Inbounds  []ExitInbound `json:"inbounds"`
+	SocksUser   string            `json:"socks_user"`
+	SocksPass   string            `json:"socks_pass"`
+	Inbounds    []ExitInbound     `json:"inbounds"`
+	Identity    ExitIdentity      `json:"identity"`
+	Diagnostics TunnelDiagnostics `json:"diagnostics"`
 }
 
 // ExitsView 是主界面需要的全部数据。
@@ -106,11 +108,14 @@ func (m *Manager) ExitsOf() ExitsView {
 	for i, t := range tunnels {
 		byHost[sanitizeTag(t.Node.HostName)] = i
 		cred := t.credential()
+		t.mu.Lock()
+		identity, diagnostics := t.Identity, t.LastDiagnostics
+		t.mu.Unlock()
 		view.Exits = append(view.Exits, Exit{
 			Slot: t.Slot, Port: t.Port, Host: t.Node.HostName,
 			Region: t.Node.CountryCode, Country: nodeLabel(t.Node),
 			ExitIP: t.ExitIP, Status: t.Status, Err: t.Err, Since: t.Since,
-			SocksUser: cred.User, SocksPass: cred.Pass,
+			SocksUser: cred.User, SocksPass: cred.Pass, Identity: identity, Diagnostics: diagnostics,
 		})
 	}
 

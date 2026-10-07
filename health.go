@@ -2,9 +2,6 @@ package main
 
 import (
 	"log"
-	"os/exec"
-	"strconv"
-	"strings"
 	"time"
 )
 
@@ -48,18 +45,20 @@ func (m *Manager) WatchHealth() {
 // openvpn 死掉后照样能出网，只是出口变回了母机 IP。
 // 所以要比对出口 IP 是否仍是建立隧道时拿到的那个。
 func (m *Manager) tunnelHealthy(t *Tunnel) bool {
-	out, err := cmdOutput(exec.Command("ip", "netns", "exec", t.nsName(),
-		"curl", "-s", "--max-time", strconv.Itoa(int(healthTimeout.Seconds())),
-		"http://api.ipify.org"))
-	if err != nil {
-		return false
+	socks, got := probeSOCKSExit(t)
+	web := ProbeResult{Detail: "SOCKS 出口验证未通过"}
+	if socks.OK && got == t.ExitIP {
+		web = probeWeb(t)
+	} else {
+		socks.OK = false
+		socks.Detail = "出口失效或发生变化"
 	}
-	got := strings.TrimSpace(string(out))
-	if got == "" {
-		return false
-	}
-	// 出口 IP 变了说明 VPN 已经断开，流量退回了母机
-	return got == t.ExitIP
+	healthy := socks.OK && web.OK
+	m.quality.record(t.Node.HostName, healthy, socks.LatencyMS)
+	t.mu.Lock()
+	t.LastDiagnostics = TunnelDiagnostics{CheckedAt: time.Now(), SOCKS: socks, HTTPS: web, Identity: t.Identity, Scope: "server_local"}
+	t.mu.Unlock()
+	return healthy
 }
 
 // reconnect 就地把一条隧道换到别的节点上，保持槽位与端口不变，

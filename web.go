@@ -203,7 +203,7 @@ textarea:focus{outline:none;border-color:var(--accent)}
     <a href="https://t.me/+ft-zI76oovgwNmRh" target="_blank" rel="noopener">交流群</a>
     <a href="https://youtube.com/@joeyblog" target="_blank" rel="noopener">油管</a>
     <a href="https://joeyblog.net" target="_blank" rel="noopener">博客</a>
-    <a href="https://github.com/byJoey/fanout" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://github.com/somanybaby/fanout" target="_blank" rel="noopener">GitHub</a>
   </nav>
 </header>
 
@@ -480,8 +480,9 @@ textarea:focus{outline:none;border-color:var(--accent)}
         <select id="setBackend"></select></label>
       <div class="hint" id="setBackendHint">节点从哪来。装了 3x-ui 或 xray-cf-lite 就能直接接管，都没有就用自建。</div>
 
-      <label class="chk" style="margin-top:16px"><input type="checkbox" id="setResi"> 只用家宽节点</label>
-      <div class="hint" id="setResiHint">vpngate 里混着一批它自己的机房机器，出口一眼看得出是数据中心。勾着就只挑志愿者家宽。</div>
+      <label class="chk" style="margin-top:16px"><input type="checkbox" id="setResi"> 只用家宽候选节点</label>
+<label class="f"><span>补充节点来源（可选）</span><textarea id="setSources" rows="3" placeholder="每行一个可信的 HTTPS VPN Gate CSV 地址"></textarea><small>保留原来源；近期国家缓存 6 小时。更多国家需要真实节点，缓存不保证在线。</small></label>
+      <div class="hint" id="setResiHint">vpngate 里混着一批它自己的机房机器，出口一眼看得出是数据中心。勾选后排除已知机房；其余仅为家宽候选，不能保证 IP 纯净度或服务解锁。</div>
 
       <div class="setrow">
         <label class="f" style="margin:0"><span>监听端口</span>
@@ -619,10 +620,11 @@ function renderExits(){
       +   '<span class="socks"><button data-cred="' + e.slot + '" title="SOCKS5 访问凭据">'
       +     ICON.lock + ':' + e.port + '</button></span>'
       +   '<span class="acts">'
+      +     '<button data-diag="' + e.slot + '" title="检查认证、HTTPS 和节点握手">检查</button>'
       +     '<button class="icon" data-swap="' + e.slot + '" title="换一个节点">' + ICON.redo + '</button>'
       +     '<button class="icon" data-stop="' + e.slot + '" title="停止这个出口">' + ICON.stop + '</button>'
       +   '</span>'
-      + '</div>' + err + '</div>';
+      + '</div>' + (e.identity && e.identity.ip ? '<div class="meta">核验：' + esc(e.identity.country || '未知国家') + ' · ' + esc(e.identity.operator || '运营商未知') + ' · ' + esc(e.identity.asn || 'ASN 未知') + ' · ' + (e.identity.residential==='candidate'?'家宽候选，未保证解锁或纯净度':'属性未知或机房') + '</div>' : '') + err + '</div>';
   }).join('');
 }
 
@@ -708,6 +710,7 @@ document.querySelectorAll('.modal').forEach(m => {
   m.onclick = e => { if(e.target === m) m.classList.remove('open'); };
 });
 
+let regionInitialized=false;
 function renderRegions(){
   const kw = $('#rgfilter').value.trim().toLowerCase();
   const list = regions.filter(r => !kw
@@ -756,6 +759,8 @@ async function loadWizard(){
   try{
     regions = await api('/api/regions') || [];
     regionsLoaded = true;
+    regions.sort((a,b)=>(a.code==='JP'?-1:b.code==='JP'?1:0));
+    if(!regionInitialized){if(regions.some(r=>r.code==='JP'))region='JP';regionInitialized=true;}
     renderRegions();
   }catch(e){ toast('读取地区失败: ' + e.message, true); }
 
@@ -905,6 +910,8 @@ $('#go').onclick = async e => {
 
 // ---- 出口操作 ----
 document.addEventListener('click', async e => {
+  const diag=e.target.closest('[data-diag]');
+  if(diag){diag.disabled=true;try{const d=await api('/api/diagnostics?slot='+diag.dataset.diag,{method:'POST'});alert(['SOCKS：'+d.socks.detail,'HTTPS：'+d.https.detail,'节点：'+d.node.detail,'本机检查不代表你的手机到服务器的延迟。'].join('\n'));}catch(err){toast(err.message,true);}finally{diag.disabled=false;}return;}
   const stop = e.target.closest('[data-stop]');
   if(stop){
     stop.disabled = true;
@@ -1291,6 +1298,7 @@ $('#settingsBtn').onclick = async () => {
     $('#setPort').value = s.port || '';
     $('#setListen').value = s.listen_addr || '0.0.0.0';
     $('#setResi').checked = s.residential_only !== false;
+    $('#setSources').value=(s.additional_sources || []).join('\n');
     $('#setPathHint').textContent = '界面挂在这个路径下，扫端口的探不到。只能用字母数字和 - _。';
     $('#updCur').textContent = s.version || '-';
     $('#updLatest').textContent = '';
@@ -1365,6 +1373,7 @@ $('#setSave').onclick = async e => {
   if(port) body.port = port;
   body.listen_addr = $('#setListen').value;
   body.residential_only = $('#setResi').checked;
+  body.additional_sources=$('#setSources').value.split('\n').map(s=>s.trim()).filter(Boolean);
 
   const portChanged = curSettings && (port !== curSettings.port
     || body.listen_addr !== (curSettings.listen_addr || '0.0.0.0'));

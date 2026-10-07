@@ -5,7 +5,7 @@ set -uo pipefail
 WORK_DIR=/var/lib/fanout
 SERVICE=fanout
 BIN=/usr/local/bin/fanout
-REPO="${REPO:-byJoey/fanout}"
+REPO="${REPO:-somanybaby/fanout}"
 
 G='\033[0;32m'; R='\033[0;31m'; Y='\033[0;33m'; B='\033[0;36m'; D='\033[2m'; N='\033[0m'
 
@@ -252,7 +252,7 @@ show_links() {
   echo -e "  交流群  ${B}https://t.me/+ft-zI76oovgwNmRh${N}"
   echo -e "  油管    ${B}https://youtube.com/@joeyblog${N}"
   echo -e "  博客    ${B}https://joeyblog.net${N}"
-  echo -e "  项目    ${B}https://github.com/byJoey/fanout${N}"
+  echo -e "  项目    ${B}https://github.com/somanybaby/fanout${N}"
   echo
   echo -e "  ${D}用着有问题、或者想要什么功能，去群里说或提 issue。${N}"
 }
@@ -274,28 +274,8 @@ migrate_port_to_settings() {
 }
 
 do_update() {
-  local arch goarch tmp
-  arch=$(uname -m)
-  case "$arch" in
-    x86_64) goarch=amd64 ;;
-    aarch64|arm64) goarch=arm64 ;;
-    *) echo -e "  ${R}不支持的架构 ${arch}${N}"; return ;;
-  esac
-
-  echo -e "\n  当前 $("$BIN" -version 2>/dev/null || echo '-')"
-  tmp=$(mktemp -d)
-  echo "  正在下载最新版..."
-  if ! curl -fsSL "https://github.com/${REPO}/releases/latest/download/fanout-linux-${goarch}.tar.gz" \
-       -o "$tmp/f.tar.gz"; then
-    echo -e "  ${R}下载失败${N}"; rm -rf "$tmp"; return
-  fi
-  tar xzf "$tmp/f.tar.gz" -C "$tmp"
-  svc_stop
-  install -m 755 "$tmp/fanout" "$BIN"
-  migrate_port_to_settings
-  svc_start
-  rm -rf "$tmp"
-  echo -e "  ${G}已更新到 $("$BIN" -version 2>/dev/null)${N}"
+  echo "  从 somanybaby/fanout 自有发布渠道校验更新，保留配置并建立回滚任务"
+  "$BIN" -dir "$WORK_DIR" -update || { echo "  更新未完成，原版本或回滚备份保留"; return 1; }
 }
 
 do_uninstall() {

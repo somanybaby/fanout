@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -67,14 +68,18 @@ func TestSha256FromList(t *testing.T) {
 	dir := t.TempDir()
 	list := filepath.Join(dir, "checksums.txt")
 	os.WriteFile(list, []byte(
-		"abc123  fanout-linux-amd64.tar.gz\n"+
-			"def456  fanout-linux-arm64.tar.gz\n"), 0644)
+		strings.Repeat("a", 64)+"  fanout-linux-amd64.tar.gz\n"+
+			strings.Repeat("b", 64)+"  fanout-linux-arm64.tar.gz\n"), 0644)
 	got, err := sha256FromList(list, "fanout-linux-arm64.tar.gz")
-	if err != nil || got != "def456" {
+	if err != nil || got != strings.Repeat("b", 64) {
 		t.Fatalf("sha256FromList => %q %v", got, err)
 	}
 	if _, err := sha256FromList(list, "missing.tar.gz"); err == nil {
 		t.Fatal("缺失条目应报错")
+	}
+	os.WriteFile(list, []byte("abc123  invalid.tar.gz\n"), 0600)
+	if _, err := sha256FromList(list, "invalid.tar.gz"); err == nil {
+		t.Fatal("malformed SHA256 was accepted")
 	}
 }
 

@@ -1,0 +1,25 @@
+name: test
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Format and static checks
+        run: |
+          test -z "$(gofmt -l *.go)"
+          go vet ./...
+          bash -n install.sh f.sh
+      - name: Regression suite including namespaces
+        run: sudo -E "$(which go)" test -count=1 -timeout 120s -v ./...
+      - name: Custom safety race checks
+        run: sudo -E "$(which go)" test -race -count=1 -run 'Test(SyncOutbounds|FanoutPriority|Catalog|Quality|Diagnostic|VPNEndpoints)' ./...

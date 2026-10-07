@@ -38,8 +38,8 @@ func TestIsResidential(t *testing.T) {
 		{"vpn123", "219.100.38.1", true},
 		{"vpn123", "219.100.36.255", true},
 		// IP 读不出来时不敢断言，放过
-		{"vpn123", "", true},
-		{"vpn123", "不是IP", true},
+		{"vpn123", "", false},
+		{"vpn123", "不是IP", false},
 	}
 	for _, c := range cases {
 		if got := isResidential(c.host, c.ip); got != c.want {

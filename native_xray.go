@@ -99,13 +99,17 @@ func buildXrayConfig(inbounds []*nativeInbound, tunnels []*Tunnel) map[string]an
 
 	rules := []any{}
 	for _, ib := range inbounds {
-		if !ib.Enable || ib.BoundTo == "" || !live[ib.BoundTo] {
+		if !ib.Enable || ib.BoundTo == "" {
 			continue
+		}
+		outbound := "block"
+		if live[ib.BoundTo] {
+			outbound = xuiTagPrefix + ib.BoundTo
 		}
 		rules = append(rules, map[string]any{
 			"type":        "field",
 			"inboundTag":  []any{ib.tag()},
-			"outboundTag": xuiTagPrefix + ib.BoundTo,
+			"outboundTag": outbound,
 		})
 	}
 
@@ -149,7 +153,7 @@ func nativeInboundJSON(ib *nativeInbound) map[string]any {
 		"protocol":       ib.Protocol,
 		"settings":       settings,
 		"streamSettings": streamSettingsJSON(ib),
-		"sniffing":       map[string]any{"enabled": true, "destOverride": []any{"http", "tls"}},
+		"sniffing":       map[string]any{"enabled": true, "destOverride": []any{"http", "tls"}, "routeOnly": true},
 	}
 }
 

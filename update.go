@@ -16,10 +16,13 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
-const updateRepo = "byJoey/fanout"
+const updateRepo = "somanybaby/fanout"
+
+var updateMu sync.Mutex
 
 // releaseInfo 是 GitHub Releases API 里我们关心的字段。
 type releaseInfo struct {
@@ -144,6 +147,10 @@ func parseSemver(v string) ([3]int, bool) {
 // applyUpdate 下载最新版对应架构的包、校验、替换当前二进制，然后重启服务。
 // 成功后本进程会被 init 系统拉起成新版本，所以正常情况下这里返回后进程即被替换。
 func applyUpdate() error {
+	if !updateMu.TryLock() {
+		return fmt.Errorf("已有更新正在运行")
+	}
+	defer updateMu.Unlock()
 	rel, err := fetchLatestRelease()
 	if err != nil {
 		return err
@@ -163,6 +170,9 @@ func applyUpdate() error {
 	if assetURL == "" {
 		return fmt.Errorf("最新版里找不到适配 %s 的包", arch)
 	}
+	if sumsURL == "" {
+		return fmt.Errorf("发布包缺少 SHA256 校验和，拒绝更新")
+	}
 
 	tmp, err := os.MkdirTemp("", "fanout-update-")
 	if err != nil {
@@ -175,16 +185,19 @@ func applyUpdate() error {
 		return fmt.Errorf("下载失败: %w", err)
 	}
 
-	// 有校验和就核对，防止下到损坏或被篡改的包
-	if sumsURL != "" {
-		if err := verifyChecksum(tarPath, assetName, sumsURL); err != nil {
-			return err
-		}
+	if err := verifyChecksum(tarPath, assetName, sumsURL); err != nil {
+		return err
 	}
 
 	newBin := filepath.Join(tmp, "fanout")
 	if err := extractBinary(tarPath, "fanout", newBin); err != nil {
 		return fmt.Errorf("解包失败: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	out, err := exec.CommandContext(ctx, newBin, "-version").Output()
+	cancel()
+	if err != nil || strings.TrimSpace(string(out)) != "fanout "+rel.TagName {
+		return fmt.Errorf("新程序版本验证失败，拒绝替换")
 	}
 
 	self, err := os.Executable()
@@ -192,6 +205,13 @@ func applyUpdate() error {
 		return fmt.Errorf("定位当前程序失败: %w", err)
 	}
 	self, _ = filepath.EvalSymlinks(self)
+	backup := self + ".rollback"
+	if err := copyFileMode(self, backup, 0755); err != nil {
+		return fmt.Errorf("备份当前程序失败: %w", err)
+	}
+	if err := scheduleUpdateWatchdog(backup, rel.TagName); err != nil {
+		return err
+	}
 
 	// 原子替换：先写到同目录临时文件再 rename，避免替一半崩了留下坏二进制
 	staged := self + ".new"
@@ -264,6 +284,9 @@ func sha256FromList(listPath, name string) (string, error) {
 	for _, line := range strings.Split(string(blob), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) == 2 && strings.TrimPrefix(fields[1], "*") == name {
+			if decoded, err := hex.DecodeString(fields[0]); err != nil || len(decoded) != 32 {
+				return "", fmt.Errorf("SHA256 格式无效")
+			}
 			return fields[0], nil
 		}
 	}
@@ -306,6 +329,9 @@ func extractBinary(tarGz, member, dst string) error {
 		}
 		if filepath.Base(hd.Name) != member {
 			continue
+		}
+		if hd.Typeflag != tar.TypeReg || hd.Size <= 0 || hd.Size > 128<<20 {
+			return fmt.Errorf("程序成员格式或大小无效")
 		}
 		out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
 		if err != nil {

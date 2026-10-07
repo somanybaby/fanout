@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // version 由构建时通过 -ldflags 注入。
@@ -26,6 +27,8 @@ func main() {
 	panelMode := flag.String("panel", "", "节点链接后端: 留空按界面设置/自动探测, 3x-ui, native, xray-cf-lite")
 	publicIP := flag.String("ip", "", "母机公网 IPv4，用于分享链接/SOCKS5 地址；留空则自动探测")
 	showVersion := flag.Bool("version", false, "显示版本后退出")
+	updateCLI := flag.Bool("update", false, "从自有渠道校验升级，保留配置并启用回滚")
+	watchdog := flag.String("update-watchdog", "", "内部：检查更新并在失败时回滚")
 	flag.Parse()
 
 	if *publicIP == "" {
@@ -39,6 +42,22 @@ func main() {
 
 	if os.Geteuid() != 0 {
 		log.Fatal("需要 root 权限（要创建 netns 和改 iptables）")
+	}
+	if *watchdog != "" {
+		if err := updateWatchdog(*watchdog, *workDir); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	if *updateCLI {
+		if _, err := loadWebSettings(*workDir, *webPort, false); err != nil {
+			log.Fatal(err)
+		}
+		if err := applyUpdate(); err != nil {
+			log.Fatal(err)
+		}
+		time.Sleep(2 * time.Second)
+		return
 	}
 	if err := os.MkdirAll(*workDir, 0700); err != nil {
 		log.Fatalf("创建工作目录失败: %v", err)
@@ -79,6 +98,9 @@ func main() {
 		log.Printf("节点链接后端: %s", p.Describe())
 	}
 
+	if _, err := loadWebSettings(*workDir, *webPort, false); err != nil {
+		log.Fatal(err)
+	}
 	mgr := NewManager(*maxSlots, *workDir)
 	log.Printf("正在拉取节点列表...")
 	if n, err := mgr.RefreshNodes(); err != nil {
@@ -123,6 +145,7 @@ func main() {
 	mux.HandleFunc("/api/jobs", apiJobs(mgr))
 	mux.HandleFunc("/api/jobs/dismiss", apiJobDismiss(mgr))
 	mux.HandleFunc("/api/exits", apiExits(mgr))
+	mux.HandleFunc("/api/diagnostics", apiDiagnostics(mgr))
 	mux.HandleFunc("/api/xui", apiXUIStatus)
 	mux.HandleFunc("/api/xui/inbounds", apiXUIInbounds(mgr))
 	mux.HandleFunc("/api/xui/bind", apiXUIBind(mgr))
@@ -323,11 +346,12 @@ func apiCred(m *Manager) http.HandlerFunc {
 // GET 返回当前值（不含明文口令）；POST 按传入的字段逐项应用，任一项失败即整体回报。
 func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 	type settingsReq struct {
-		Password        *string `json:"password"`         // 非空则改口令
-		BasePath        *string `json:"base_path"`        // 提供即改访问路径（空串=去掉前缀）
-		Port            *int    `json:"port"`             // 提供即改监听端口
-		ListenAddr      *string `json:"listen_addr"`      // 提供即改监听地址
-		ResidentialOnly *bool   `json:"residential_only"` // 提供即改"只用家宽"
+		AdditionalSources *[]string `json:"additional_sources"`
+		Password          *string   `json:"password"`         // 非空则改口令
+		BasePath          *string   `json:"base_path"`        // 提供即改访问路径（空串=去掉前缀）
+		Port              *int      `json:"port"`             // 提供即改监听端口
+		ListenAddr        *string   `json:"listen_addr"`      // 提供即改监听地址
+		ResidentialOnly   *bool     `json:"residential_only"` // 提供即改"只用家宽"
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
@@ -337,6 +361,12 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 				return
 			}
 
+			if in.AdditionalSources != nil {
+				if err := setAdditionalSources(*in.AdditionalSources); err != nil {
+					writeJSON(w, 400, map[string]string{"error": err.Error()})
+					return
+				}
+			}
 			// 改口令
 			if in.Password != nil && *in.Password != "" {
 				if err := auth.SetPassword(*in.Password); err != nil {
@@ -381,12 +411,15 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 			listen = "0.0.0.0"
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"base_path":        currentBasePath(),
-			"port":             cfg.Port,
-			"listen_addr":      listen,
-			"has_password":     true,
-			"residential_only": cfg.residentialOnly(),
-			"version":          version,
+			"base_path":             currentBasePath(),
+			"port":                  cfg.Port,
+			"listen_addr":           listen,
+			"has_password":          true,
+			"residential_only":      cfg.residentialOnly(),
+			"additional_sources":    cfg.AdditionalSources,
+			"protected_inbound_ids": cfg.ProtectedInboundIDs,
+			"update_repository":     updateRepo,
+			"version":               version,
 		})
 	}
 }

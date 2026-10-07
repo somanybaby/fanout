@@ -1,3 +1,21 @@
+# Fanout 自有维护版本
+
+基于 [byJoey/fanout v1.3.1](https://github.com/byJoey/fanout/tree/v1.3.1) 二次修改，保留原许可证和提交历史。自有更新渠道：[somanybaby/fanout Releases](https://github.com/somanybaby/fanout/releases)。当前维护版本：v1.4.0。
+
+- **日本优先，多国保留**：新建出口首次默认日本；不限地区、每个国家及其他国家选择均保留。没有日本可选时仍能选择其他国家。
+- **扩充真实国家覆盖**：官方 CSV 与原备用来源照常使用；保留 6 小时内的节点目录，减少低频国家随一次刷新消失。设置页支持可信 HTTPS VPN Gate CSV 补充来源。缓存不保证在线，地区数量由真实来源决定。
+- **保护原直连**：`settings.json` 的 `protected_inbound_ids` 可保护指定 3x-ui 入站，禁止 Fanout 改绑、删除、改端口或重置客户端。原有非 Fanout 出站和规则保留；只把家宽入站的路由提前。3x-ui 3.7.0 支持模板热更新；其他版本若未确认生效则恢复模板，默认不主动重启 Xray。
+- **家宽断线阻断**：内置独立网络命名空间出口防护，只允许 VPN、隧道接口和启动所需 DNS。家宽绑定离线后阻断，不回退到直连。此防护不修改原直连入站策略。
+- **可核验的状态**：认证 SOCKS、HTTPS 访问、实际出口国家和运营商检查。每个出口的“检查”可执行本机 Reality 握手；手机到服务器的连通与延迟仍需外部测试。
+- **真实表述**：排除已知机房后仍只能称家宽候选。ASN/运营商不证明纯净度、AI 可用性或影视解锁；志愿节点的 IP、在线状态会变化。
+- **自有升级**：网页及 `f update` 使用自有发布，强制 SHA256、版本验证、原子替换和上一版程序备份。systemd 自动升级在 60 秒后检查程序版本与管理服务；失败自动回滚程序。该检查不承诺所有志愿者出口已恢复，配置备份与外部节点测试仍必要。OpenRC 请手动备份升级。
+
+初始化原直连保护示例：`"protected_inbound_ids": [1, 2, 3]`。请填写自己面板的实际入站 ID；此值需在服务器设置文件管理，不提供误操作清空按钮。完整变更见 [CHANGELOG.md](CHANGELOG.md)，来源见 [UPSTREAM.md](UPSTREAM.md)。
+
+以下保留原项目的功能与用法说明，安装和更新地址已切换到自有仓库。
+
+---
+
 # fanout
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -31,7 +49,7 @@ SOCKS5 监听在母机，出站连接用 `setns` 切进对应 netns 建立。
 需要 root，Linux（依赖 netns）。
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/byJoey/fanout/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/somanybaby/fanout/main/install.sh)
 ```
 
 会自动下载对应架构的预编译二进制。也可以 clone 仓库后在源码目录运行同一个脚本，
@@ -47,7 +65,7 @@ Xray 到 `/var/lib/fanout/bin/`，装了则跳过，入站交给面板管。
 
 ```bash
 apk add bash curl
-bash <(curl -fsSL https://raw.githubusercontent.com/byJoey/fanout/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/somanybaby/fanout/main/install.sh)
 ```
 
 另外 fanout 要在 netns 里跑 openvpn，**宿主必须放开 `/dev/net/tun`**。
@@ -183,7 +201,7 @@ netns 仍能经母机 NAT 出网，只看通不通会漏判。连续两次不符
 ## 已知限制
 
 - SOCKS5 支持 CONNECT 和 UDP ASSOCIATE，DNS/QUIC 这类 UDP 也走隧道
-  （感谢 [@zsawi](https://github.com/zsawi) 的 [#22](https://github.com/byJoey/fanout/pull/22)）。
+  （感谢 [@zsawi](https://github.com/zsawi) 的 [#22](https://github.com/somanybaby/fanout/pull/22)）。
   域名仍在本机解析。
 - VPN Gate 是志愿者节点，有相当比例已下线或满员（`AUTH_FAILED`）。
   启动时连不上会自动顺着同地区候选往下试，最多 6 个。

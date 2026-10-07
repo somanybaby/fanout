@@ -69,7 +69,7 @@ func isResidential(hostName, ip string) bool {
 	addr := net.ParseIP(strings.TrimSpace(ip))
 	if addr == nil {
 		// IP 解析不出来时不敢断言，按家宽放过，让连通性测试去淘汰
-		return true
+		return false
 	}
 	for _, cidr := range vpngateOwnNets {
 		_, block, err := net.ParseCIDR(cidr)

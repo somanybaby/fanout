@@ -45,11 +45,14 @@ func TestBuildXrayConfigBindsOnlyLiveTunnels(t *testing.T) {
 	}
 
 	rules := cfg["routing"].(map[string]any)["rules"].([]any)
-	if len(rules) != 1 {
-		t.Fatalf("只有绑到连通隧道的入站才该有规则，实际 %d 条", len(rules))
+	if len(rules) != 2 {
+		t.Fatalf("离线绑定也必须保留阻断规则，实际 %d 条", len(rules))
 	}
 	if got := rules[0].(map[string]any)["outboundTag"]; got != "fanout-jp1" {
 		t.Errorf("outboundTag = %v, want fanout-jp1", got)
+	}
+	if rules[1].(map[string]any)["outboundTag"] != "block" {
+		t.Fatal("offline house entry leaked into direct")
 	}
 }
 

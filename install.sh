@@ -34,10 +34,19 @@ fi
 # 否则沿用原值，免得重装一次把人家改好的端口打回默认。
 seed_settings() {
   local f="${WORK_DIR}/settings.json"
-  if [[ -f "$f" ]] && [[ -z "${WEB_PORT_EXPLICIT:-}" ]]; then
-    local cur
-    cur=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$f" | head -1)
-    [[ -n $cur ]] && { WEB_PORT="$cur"; return; }
+  if [[ -f "$f" ]]; then
+    if [[ -n "${WEB_PORT_EXPLICIT:-}" ]]; then
+      # Modify just the port: never erase subscription tokens, loopback binding,
+      # protected original nodes, or additional sources on reinstall.
+      [[ "$WEB_PORT" =~ ^[0-9]+$ ]] && (( WEB_PORT>=1 && WEB_PORT<=65535 )) || return 1
+      cp -p "$f" "$f.before-reinstall"
+      sed -i "s/\"port\"[[:space:]]*:[[:space:]]*[0-9]*/\"port\": ${WEB_PORT}/" "$f"
+    else
+      local cur
+      cur=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$f" | head -1)
+      [[ -n $cur ]] && WEB_PORT="$cur"
+    fi
+    return
   fi
   printf '{\n  "port": %s,\n  "listen_addr": ""\n}\n' "$WEB_PORT" > "$f"
   chmod 600 "$f"
@@ -160,7 +169,7 @@ if [[ ${#need_cmd[@]} -gt 0 ]]; then
 fi
 
 echo "[2/6] 获取程序"
-REPO="${REPO:-byJoey/fanout}"
+REPO="${REPO:-somanybaby/fanout}"
 ARCH=$(uname -m)
 case "$ARCH" in
   x86_64)  GOARCH=amd64 ;;
@@ -180,7 +189,13 @@ else
     echo "      也可以 clone 仓库后在源码目录运行本脚本" >&2
     exit 1
   fi
-  tar xzf "$TMP/f.tar.gz" -C "$TMP"
+  ASSET="fanout-linux-${GOARCH}.tar.gz"
+  mv "$TMP/f.tar.gz" "$TMP/$ASSET"
+  curl -fsSL "https://github.com/${REPO}/releases/latest/download/checksums.txt" -o "$TMP/checksums.txt"
+  (cd "$TMP"; grep -E " [ *]?$ASSET$" checksums.txt > selected-sum.txt; test -s selected-sum.txt; sha256sum -c selected-sum.txt)
+  tar xzf "$TMP/$ASSET" -C "$TMP"
+  "$TMP/fanout" -version
+  [[ ! -f "$BIN" ]] || cp -p "$BIN" "$BIN.before-install"
   install -m 755 "$TMP/fanout" "$BIN"
   [[ -f fanout.service ]] || cp "$TMP/fanout.service" .
   [[ -f "$TMP/f.sh" ]] && install -m 755 "$TMP/f.sh" /usr/local/bin/f
@@ -289,5 +304,5 @@ echo "  ────────────────────────
 echo "  交流群  https://t.me/+ft-zI76oovgwNmRh"
 echo "  油管    https://youtube.com/@joeyblog"
 echo "  博客    https://joeyblog.net"
-echo "  项目    https://github.com/byJoey/fanout"
+echo "  项目    https://github.com/somanybaby/fanout"
 echo

@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -139,7 +138,13 @@ func runtimeMatchesTemplate(setting map[string]any) bool {
 	if json.Unmarshal(blob, &actual) != nil {
 		return false
 	}
-	return reflect.DeepEqual(actual["routing"], setting["routing"]) && reflect.DeepEqual(actual["outbounds"], setting["outbounds"])
+	return templateRuntimeMatches(actual, setting)
+}
+
+func templateRuntimeMatches(actual, setting map[string]any) bool {
+	// Runtime JSON numbers decode as float64; constructed SOCKS ports are int.
+	// Compare canonical JSON values, so equivalent ports do not trigger rollback.
+	return equalJSON(actual["routing"], setting["routing"]) && equalJSON(actual["outbounds"], setting["outbounds"])
 }
 
 func (x *XUI) validateTemplate(setting map[string]any) error {

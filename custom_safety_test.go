@@ -79,3 +79,17 @@ func TestDiagnosticPreservesRealityFieldsAndUsesLocalEntry(t *testing.T) {
 		t.Fatal("flow lost")
 	}
 }
+
+func TestTemplateRuntimeMatchesEquivalentJSONNumbers(t *testing.T) {
+	expected := map[string]any{"routing": map[string]any{"rules": []any{}}, "outbounds": []any{map[string]any{"tag": "fanout-test", "settings": map[string]any{"port": 1080}}}}
+	blob, _ := json.Marshal(expected)
+	var actual map[string]any
+	json.Unmarshal(blob, &actual)
+	if !templateRuntimeMatches(actual, expected) {
+		t.Fatal("equivalent int and JSON float port rejected")
+	}
+	actual["routing"] = map[string]any{"rules": []any{map[string]any{"outboundTag": "direct"}}}
+	if templateRuntimeMatches(actual, expected) {
+		t.Fatal("different routing incorrectly accepted")
+	}
+}

@@ -34,7 +34,7 @@ func NewManager(maxSlots int, workDir string) *Manager {
 func (m *Manager) RefreshNodes() (int, error) {
 	nodes, err := fetchNodes(60 * time.Second)
 	if err != nil {
-		return 0, err
+		log.Printf("官方节点源暂不可用，尝试补充源和近期目录")
 	}
 	for _, source := range getWebSettings().AdditionalSources {
 		extra, ferr := fetchAdditionalNodes(source)
@@ -49,6 +49,9 @@ func (m *Manager) RefreshNodes() (int, error) {
 	m.fetched = time.Now()
 	count := len(m.nodes)
 	m.mu.Unlock()
+	if count == 0 && err != nil {
+		return 0, err
+	}
 	return count, nil
 }
 
@@ -305,7 +308,7 @@ func (m *Manager) candidatesFor(t *Tunnel) []Node {
 		if used[n.HostName] || avoid[n.HostName] {
 			continue
 		}
-		// 地区实在拿不到时不做限制，总比连不上强
+		// 缺少国家信息时保留当前节点，不自动跨国切换
 		if region == "" || n.CountryCode != region {
 			continue
 		}

@@ -68,7 +68,7 @@ func fetchLatestRelease() (*releaseInfo, error) {
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "fanout-updater")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := mainHTTPClient(120 * time.Second).Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +194,7 @@ func applyUpdate() error {
 		return fmt.Errorf("解包失败: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	out, err := exec.CommandContext(ctx, newBin, "-version").Output()
+	out, err := cmdOutput(exec.CommandContext(ctx, newBin, "-version"))
 	cancel()
 	if err != nil || strings.TrimSpace(string(out)) != "fanout "+rel.TagName {
 		return fmt.Errorf("新程序版本验证失败，拒绝替换")
@@ -206,6 +206,19 @@ func applyUpdate() error {
 	}
 	self, _ = filepath.EvalSymlinks(self)
 	backup := self + ".rollback"
+	dir := filepath.Join(filepath.Dir(webSettingsPath), "update-backups", time.Now().UTC().Format("20060102T150405.000000000Z"))
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	for _, name := range []string{"state.json", "settings.json", "password", "basepath", "xui-token", "native-inbounds.json"} {
+		src := filepath.Join(filepath.Dir(webSettingsPath), name)
+		if _, err := os.Stat(src); os.IsNotExist(err) {
+			continue
+		}
+		if err := copyFileMode(src, filepath.Join(dir, name), 0600); err != nil {
+			return fmt.Errorf("更新前配置备份失败: %w", err)
+		}
+	}
 	if err := copyFileMode(self, backup, 0755); err != nil {
 		return fmt.Errorf("备份当前程序失败: %w", err)
 	}
@@ -240,7 +253,7 @@ func downloadFile(url, dst string) error {
 		return err
 	}
 	req.Header.Set("User-Agent", "fanout-updater")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := mainHTTPClient(120 * time.Second).Do(req)
 	if err != nil {
 		return err
 	}
@@ -366,11 +379,11 @@ func copyFileMode(src, dst string, mode os.FileMode) error {
 // systemd / openrc 各一套；都不可用时退回直接自我 exec。
 func restartSelf() {
 	if hasCmd("systemctl") && dirExists("/run/systemd/system") {
-		_ = exec.Command("systemctl", "restart", "fanout").Start()
+		_ = cmdStart(exec.Command("systemctl", "restart", "fanout"))
 		return
 	}
 	if hasCmd("rc-service") {
-		_ = exec.Command("rc-service", "fanout", "restart").Start()
+		_ = cmdStart(exec.Command("rc-service", "fanout", "restart"))
 		return
 	}
 	// 没有 init 系统托管：直接退出，让外部守护（若有）拉起；

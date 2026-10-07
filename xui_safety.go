@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -145,6 +147,58 @@ func templateRuntimeMatches(actual, setting map[string]any) bool {
 	// Runtime JSON numbers decode as float64; constructed SOCKS ports are int.
 	// Compare canonical JSON values, so equivalent ports do not trigger rollback.
 	return equalJSON(actual["routing"], setting["routing"]) && equalJSON(actual["outbounds"], setting["outbounds"])
+}
+
+// 3x-ui 3.7 applies a successful template update to the in-memory core, but
+// does not persist that hot snapshot to config.json. Confirm its documented
+// synchronous API contract and unchanged core PID instead of trusting a stale
+// file. Unknown panel versions keep the conservative file-confirmation path.
+func knownSynchronousHotAPI() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := cmdOutput(exec.CommandContext(ctx, xuiBinary, "-v"))
+	return err == nil && strings.TrimSpace(string(out)) == "3.7.0"
+}
+
+func coreCommand(args []byte) bool {
+	for _, p := range bytes.Split(args, []byte{0}) {
+		if string(p) == "bin/config.json" || string(p) == "/usr/local/x-ui/bin/config.json" {
+			return true
+		}
+	}
+	return false
+}
+
+func corePIDs() []string {
+	dirs, _ := os.ReadDir("/proc")
+	var pids []string
+	for _, d := range dirs {
+		if !d.IsDir() {
+			continue
+		}
+		args, err := os.ReadFile(filepath.Join("/proc", d.Name(), "cmdline"))
+		if err == nil && coreCommand(args) {
+			pids = append(pids, d.Name())
+		}
+	}
+	sort.Strings(pids)
+	return pids
+}
+
+func onlyHotFieldsChanged(old, next map[string]any) bool {
+	a := map[string]any{}
+	b := map[string]any{}
+	for k, v := range old {
+		if k != "routing" && k != "outbounds" {
+			a[k] = v
+		}
+	}
+	for k, v := range next {
+		if k != "routing" && k != "outbounds" {
+			b[k] = v
+		}
+	}
+	return equalJSON(a, b)
 }
 
 func (x *XUI) validateTemplate(setting map[string]any) error {

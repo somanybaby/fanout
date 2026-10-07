@@ -22,14 +22,16 @@ type SocksCred struct {
 
 // Tunnel 是一条运行中的隧道：一个 netns + 一个 openvpn 进程 + 一个本地 SOCKS5 端口。
 type Tunnel struct {
-	Slot   int       `json:"slot"`
-	Port   int       `json:"port"`
-	Node   Node      `json:"node"`
-	Status string    `json:"status"` // starting | up | failed | stopped
-	ExitIP string    `json:"exit_ip"`
-	Err    string    `json:"err,omitempty"`
-	Since  time.Time `json:"since"`
-	Cred   SocksCred `json:"cred"`
+	Slot            int               `json:"slot"`
+	Port            int               `json:"port"`
+	Node            Node              `json:"node"`
+	Status          string            `json:"status"` // starting | up | failed | stopped
+	Identity        ExitIdentity      `json:"identity"`
+	LastDiagnostics TunnelDiagnostics `json:"diagnostics"`
+	ExitIP          string            `json:"exit_ip"`
+	Err             string            `json:"err,omitempty"`
+	Since           time.Time         `json:"since"`
+	Cred            SocksCred         `json:"cred"`
 
 	ns       string
 	listener net.Listener

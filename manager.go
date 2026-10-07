@@ -18,6 +18,7 @@ type Manager struct {
 	workDir  string
 	maxSlots int
 	jobs     JobStore
+	quality  *qualityStore
 }
 
 func NewManager(maxSlots int, workDir string) *Manager {
@@ -25,6 +26,7 @@ func NewManager(maxSlots int, workDir string) *Manager {
 		tunnels:  map[int]*Tunnel{},
 		workDir:  workDir,
 		maxSlots: maxSlots,
+		quality:  newQualityStore(workDir),
 	}
 }
 
@@ -34,11 +36,20 @@ func (m *Manager) RefreshNodes() (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	for _, source := range getWebSettings().AdditionalSources {
+		extra, ferr := fetchAdditionalNodes(source)
+		if ferr != nil {
+			log.Printf("补充节点源暂不可用")
+			continue
+		}
+		nodes = append(nodes, extra...)
+	}
 	m.mu.Lock()
-	m.nodes = nodes
+	m.nodes = mergeCatalog(m.workDir, nodes, time.Now())
 	m.fetched = time.Now()
+	count := len(m.nodes)
 	m.mu.Unlock()
-	return len(nodes), nil
+	return count, nil
 }
 
 func (m *Manager) Nodes() ([]Node, time.Time) {
@@ -190,6 +201,7 @@ func (m *Manager) tryCandidates(t *Tunnel, notify bool) bool {
 		if err == nil {
 			t.Status = "up"
 			t.Err = ""
+			t.Since = time.Now()
 			if serr := m.saveState(); serr != nil {
 				log.Printf("保存状态失败: %v", serr)
 			}
@@ -198,6 +210,7 @@ func (m *Manager) tryCandidates(t *Tunnel, notify bool) bool {
 			}
 			return true
 		}
+		m.quality.record(node.HostName, false, 0)
 		t.teardownNetns()
 	}
 	return false
@@ -221,6 +234,9 @@ func (m *Manager) tryNode(t *Tunnel) error {
 	if err := t.setupNetns(); err != nil {
 		return err
 	}
+	if err := t.installEgressGuard(); err != nil {
+		return fmt.Errorf("出口保护失败: %w", err)
+	}
 	if err := t.startOpenVPN(m.workDir); err != nil {
 		return err
 	}
@@ -229,11 +245,25 @@ func (m *Manager) tryNode(t *Tunnel) error {
 			return err
 		}
 	}
-	ip, err := t.probeExitIP()
+	probe, ip := probeSOCKSExit(t)
+	if !probe.OK {
+		return fmt.Errorf("认证 SOCKS 出口检查失败")
+	}
+	identity, err := lookupExitIdentity(t, ip)
 	if err != nil {
 		return err
 	}
+	if t.Node.CountryCode != "" && identity.Country != t.Node.CountryCode {
+		return fmt.Errorf("实际出口国家 %s 与选择的 %s 不符", identity.Country, t.Node.CountryCode)
+	}
+	if residentialOnly() && identity.Residential == "hosting" {
+		return fmt.Errorf("实际出口为已知机房节点")
+	}
+	t.mu.Lock()
+	t.Identity = identity
+	t.mu.Unlock()
 	t.ExitIP = ip
+	m.quality.record(t.Node.HostName, true, probe.LatencyMS)
 	return nil
 }
 
@@ -276,7 +306,7 @@ func (m *Manager) candidatesFor(t *Tunnel) []Node {
 			continue
 		}
 		// 地区实在拿不到时不做限制，总比连不上强
-		if region != "" && n.CountryCode != region {
+		if region == "" || n.CountryCode != region {
 			continue
 		}
 		out = append(out, n)

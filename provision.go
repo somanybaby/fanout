@@ -252,7 +252,7 @@ func (m *Manager) noNodesErrLocked(region string, filtered bool) error {
 // 否则改一下设置就把用户手上所有出口的 IP 全换了。
 func (m *Manager) nodePoolLocked() []Node {
 	if !residentialOnly() {
-		return m.nodes
+		return m.quality.rank(m.nodes)
 	}
 	out := make([]Node, 0, len(m.nodes))
 	for _, n := range m.nodes {
@@ -260,7 +260,7 @@ func (m *Manager) nodePoolLocked() []Node {
 			out = append(out, n)
 		}
 	}
-	return out
+	return m.quality.rank(out)
 }
 
 // RegionStat 是某个地区的可用节点概况，用于新建向导里的地区选择。

@@ -1,3 +1,12 @@
 fanout
 *.tar.gz
 *.log
+
+*.test
+*.exe
+*.db
+.tools/
+build/
+state.json
+settings.json
+validation-private.json

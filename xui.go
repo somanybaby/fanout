@@ -30,6 +30,7 @@ type XUI struct {
 	client   *http.Client
 	// workDir 是 fanout 的工作目录，新建 TLS 入站时自签证书落在这里。
 	workDir string
+	xrayMu  sync.Mutex
 }
 
 // base 返回访问面板用的前缀。
@@ -327,25 +328,48 @@ func (x *XUI) loadXray() (map[string]any, string, error) {
 
 // saveXray 写回 Xray 配置模板并让面板重启 Xray。
 func (x *XUI) saveXray(setting map[string]any, testURL string) error {
-	blob, err := json.Marshal(setting)
+	old, oldURL, err := x.loadXray()
 	if err != nil {
 		return err
 	}
-	form := url.Values{}
-	form.Set("xraySetting", string(blob))
-	if testURL != "" {
-		form.Set("outboundTestUrl", testURL)
+	if equalJSON(old, setting) && oldURL == testURL {
+		return nil
 	}
-	if _, err := x.post("panel/api/xray/update", form); err != nil {
+	if err := x.validateTemplate(setting); err != nil {
 		return err
 	}
-
-	// 只写模板不够：面板要重载 Xray 才会用新的 outbounds 与 routing 生成运行配置，
-	// 否则路由改动看起来保存成功了，实际流量还按旧规则走。
-	if _, err := x.post("panel/api/server/restartXrayService", nil); err != nil {
-		return fmt.Errorf("配置已保存但重载 Xray 失败: %w", err)
+	if err := x.backupTemplate(old); err != nil {
+		return err
 	}
-	return nil
+	write := func(cfg map[string]any, test string) error {
+		blob, err := json.Marshal(cfg)
+		if err != nil {
+			return err
+		}
+		form := url.Values{"xraySetting": {string(blob)}, "outboundTestUrl": {test}}
+		_, err = x.post("panel/api/xray/update", form)
+		return err
+	}
+	if err := write(setting, testURL); err != nil {
+		return err
+	}
+	for i := 0; i < 20; i++ {
+		if runtimeMatchesTemplate(setting) {
+			return nil
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	// Older panels require a disruptive restart. It must be explicitly enabled
+	// and is never permitted when original inbounds have been protected.
+	if os.Getenv("FANOUT_ALLOW_XUI_RESTART") == "1" && len(getWebSettings().ProtectedInboundIDs) == 0 {
+		if _, err := x.post("panel/api/server/restartXrayService", nil); err == nil {
+			return nil
+		}
+	}
+	if err := write(old, oldURL); err != nil {
+		return fmt.Errorf("热更新未生效，恢复模板失败；请检查 3x-ui，未主动重启原节点")
+	}
+	return fmt.Errorf("此面板未确认热更新，已恢复模板；为保护直连节点，没有重启 Xray")
 }
 
 // Inbound 是面板里已有的一个入站。
@@ -508,6 +532,8 @@ func toStringSlice(v any) []string {
 //
 // 只动 fanout- 前缀的出站与规则，用户手工配置的条目原样保留。
 func (x *XUI) Bind(inboundTag string, hostname string, tunnels []*Tunnel) error {
+	x.xrayMu.Lock()
+	defer x.xrayMu.Unlock()
 	var target *Tunnel
 	if hostname != "" {
 		for _, t := range tunnels {
@@ -537,6 +563,9 @@ func (x *XUI) Bind(inboundTag string, hostname string, tunnels []*Tunnel) error 
 	knownTags := map[string]bool{}
 	for _, ib := range current {
 		knownTags[ib.Tag] = true
+		if ib.Tag == inboundTag && protectedInbound(ib.ID) {
+			return fmt.Errorf("此直连入站已受保护，请在 3x-ui 管理")
+		}
 	}
 
 	setting, testURL, err := x.loadXray()
@@ -586,7 +615,7 @@ func (x *XUI) Bind(inboundTag string, hostname string, tunnels []*Tunnel) error 
 		})
 	}
 
-	routing["rules"] = cleaned
+	routing["rules"] = prioritizeFanoutRules(cleaned)
 	setting["routing"] = routing
 	return x.saveXray(setting, testURL)
 }
@@ -603,13 +632,20 @@ func (x *XUI) syncOutbounds(setting map[string]any, tunnels []*Tunnel) {
 		}
 		tag, _ := m["tag"].(string)
 		if !strings.HasPrefix(tag, xuiTagPrefix) {
-			forceIPv4(m)
 			kept = append(kept, ob)
+		} else {
+			kept = append(kept, map[string]any{"tag": tag, "protocol": "blackhole"})
 		}
 	}
 	for _, t := range tunnels {
-		if t.Status != "up" {
+		if t.Status == "stopped" {
 			continue
+		}
+		tag := tunnelTag(t)
+		for i := len(kept) - 1; i >= 0; i-- {
+			if existing, ok := kept[i].(map[string]any); ok && existing["tag"] == tag {
+				kept = append(kept[:i], kept[i+1:]...)
+			}
 		}
 		kept = append(kept, map[string]any{
 			"tag":      tunnelTag(t),
@@ -620,6 +656,11 @@ func (x *XUI) syncOutbounds(setting map[string]any, tunnels []*Tunnel) {
 		})
 	}
 	setting["outbounds"] = kept
+	if routing, ok := setting["routing"].(map[string]any); ok {
+		if rules, ok := routing["rules"].([]any); ok {
+			routing["rules"] = prioritizeFanoutRules(rules)
+		}
+	}
 }
 
 // CloneToTunnels 以某个入站为模板，为每条指定隧道复制一个入站并绑定到对应出口。
@@ -671,6 +712,10 @@ func (x *XUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 		clone, err := cloneInboundPayload(raw, port, t)
 		if err != nil {
 			return created, err
+		}
+		if sniff, err := asObject(clone["sniffing"]); err == nil && sniff != nil {
+			sniff["routeOnly"] = true
+			clone["sniffing"] = mustJSON(sniff)
 		}
 		if remark, ok := clone["remark"].(string); ok {
 			unique := uniqueRemark(remark, takenRemarks)
@@ -1136,6 +1181,11 @@ func (x *XUI) InboundLinks(ids []int, publicHost string) ([]string, error) {
 // 面板的 del 只动 inbounds，残留的规则会让后续绑定读到不存在的入站标签。
 func (x *XUI) DeleteInbounds(ids []int, tunnels []*Tunnel) error {
 	for _, id := range ids {
+		if protectedInbound(id) {
+			return fmt.Errorf("直连入站 %d 已受保护", id)
+		}
+	}
+	for _, id := range ids {
 		if _, err := x.post(fmt.Sprintf("panel/api/inbounds/del/%d", id), nil); err != nil {
 			return fmt.Errorf("删除入站 %d 失败: %w", id, err)
 		}
@@ -1281,6 +1331,9 @@ func inboundPayload(raw map[string]any) map[string]any {
 
 // updateInboundRaw 读出入站、让 mutate 改 payload，再整体写回。
 func (x *XUI) updateInboundRaw(id int, what string, mutate func(payload map[string]any, raw map[string]any) error) error {
+	if protectedInbound(id) {
+		return fmt.Errorf("入站 %d 受保护，拒绝修改", id)
+	}
 	raw, err := x.rawInbound(id)
 	if err != nil {
 		return err
@@ -1307,6 +1360,9 @@ func (x *XUI) renameInbound(id int, remark string) error {
 // 改端口会同时改掉 inboundTag（面板用 in-<端口>-<网络> 命名），
 // 所以绑定关系要跟着迁移，否则路由规则会指向一个不存在的入站。
 func (x *XUI) UpdateInbound(id int, patch InboundPatch, tunnels []*Tunnel) error {
+	if protectedInbound(id) {
+		return fmt.Errorf("入站 %d 是受保护的原直连节点，请在 3x-ui 中管理", id)
+	}
 	if patch.Port != nil {
 		used, err := x.usedPorts()
 		if err != nil {
@@ -1380,6 +1436,9 @@ func (x *XUI) UpdateInbound(id int, patch InboundPatch, tunnels []*Tunnel) error
 
 // AddClient 给入站加一个客户端。
 func (x *XUI) AddClient(id int, email string, tunnels []*Tunnel) error {
+	if protectedInbound(id) {
+		return fmt.Errorf("入站 %d 是受保护的原直连节点，请在 3x-ui 中管理", id)
+	}
 	raw, err := x.rawInbound(id)
 	if err != nil {
 		return err
@@ -1407,6 +1466,9 @@ func (x *XUI) AddClient(id int, email string, tunnels []*Tunnel) error {
 
 // DeleteClient 摘掉入站上的一个客户端。
 func (x *XUI) DeleteClient(id int, email string, tunnels []*Tunnel) error {
+	if protectedInbound(id) {
+		return fmt.Errorf("入站 %d 是受保护的原直连节点，请在 3x-ui 中管理", id)
+	}
 	return x.updateInboundRaw(id, "删客户端", func(p, raw map[string]any) error {
 		settings, err := asObject(raw["settings"])
 		if err != nil {
@@ -1434,6 +1496,14 @@ func (x *XUI) DeleteClient(id int, email string, tunnels []*Tunnel) error {
 
 // ResetClient 换掉客户端凭据，已分发的旧链接随即失效。
 func (x *XUI) ResetClient(id int, email string, tunnels []*Tunnel) error {
+	if protectedInbound(id) {
+		return fmt.Errorf("入站 %d 是受保护的原直连节点，请在 3x-ui 中管理", id)
+	}
+	if shared, err := x.sharedProtectedClient(email); err != nil {
+		return err
+	} else if shared {
+		return fmt.Errorf("此客户端与原直连入站共享，拒绝重置凭据")
+	}
 	return x.updateInboundRaw(id, "重置凭据", func(p, raw map[string]any) error {
 		proto := fmt.Sprint(raw["protocol"])
 		settings, err := asObject(raw["settings"])
@@ -1514,6 +1584,8 @@ func (x *XUI) Close() {}
 // ResyncOutbound 重写某条隧道对应的出站配置。
 // 用于隧道原地重连（节点名没变）后刷新端口等信息。
 func (x *XUI) ResyncOutbound(t *Tunnel, tunnels []*Tunnel) error {
+	x.xrayMu.Lock()
+	defer x.xrayMu.Unlock()
 	setting, testURL, err := x.loadXray()
 	if err != nil {
 		return err

@@ -119,6 +119,13 @@ func main() {
 	}
 
 	go mgr.WatchHealth()
+	go func() {
+		for range time.Tick(30 * time.Minute) {
+			if _, err := mgr.RefreshNodes(); err != nil {
+				log.Printf("周期节点目录刷新失败，现有连接继续保留")
+			}
+		}
+	}()
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)

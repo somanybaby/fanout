@@ -66,12 +66,13 @@ func fetchAdditionalNodes(source string) ([]Node, error) {
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
 		return nil, fmt.Errorf("补充节点源必须是 HTTPS CSV 地址")
 	}
-	client := &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+	client := mainHTTPClient(15 * time.Second)
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if req.URL.Scheme != "https" || len(via) > 5 {
 			return fmt.Errorf("节点源重定向不安全")
 		}
 		return nil
-	}}
+	}
 	r, err := client.Get(source)
 	if err != nil {
 		return nil, err

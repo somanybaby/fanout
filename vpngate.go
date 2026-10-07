@@ -68,7 +68,7 @@ func isResidential(hostName, ip string) bool {
 	}
 	addr := net.ParseIP(strings.TrimSpace(ip))
 	if addr == nil {
-		// IP 解析不出来时不敢断言，按家宽放过，让连通性测试去淘汰
+		// IP 无法解析时不能列为家宽候选
 		return false
 	}
 	for _, cidr := range vpngateOwnNets {
@@ -105,7 +105,7 @@ func fetchNodesWith(direct string, timeout time.Duration) ([]Node, error) {
 }
 
 func fetchNodesFrom(url, key string, timeout time.Duration) ([]Node, error) {
-	client := &http.Client{Timeout: timeout}
+	client := mainHTTPClient(timeout)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("拉取节点列表失败: %w", err)

@@ -20,7 +20,7 @@ func scheduleUpdateWatchdog(backup, expected string) error {
 	unit := "fanout-update-guard-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 	// Run the known working previous executable, even if the new executable fails.
 	cmd := exec.Command("systemd-run", "--quiet", "--unit", unit, "--on-active=60s", backup, "-update-watchdog", expected, "-dir", dir)
-	if err := cmd.Run(); err != nil {
+	if err := cmdRun(cmd); err != nil {
 		return fmt.Errorf("无法建立自动回滚任务，原程序未修改")
 	}
 	return nil
@@ -45,7 +45,7 @@ func updateWatchdog(expected, dir string) error {
 		if host == "" || host == "0.0.0.0" {
 			host = "127.0.0.1"
 		}
-		client := &http.Client{Timeout: 5 * time.Second}
+		client := mainHTTPClient(5 * time.Second)
 		base, _ := os.ReadFile(filepath.Join(dir, "basepath"))
 		prefix := strings.Trim(strings.TrimSpace(string(base)), "/")
 		resp, err := client.Get("http://" + host + ":" + strconv.Itoa(cfg.Port) + "/" + prefix + "/")

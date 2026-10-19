@@ -52,6 +52,9 @@ func (m *Manager) WatchHealth() {
 func (m *Manager) tunnelHealthy(t *Tunnel) bool {
 	probe := t
 	if !t.egressReady.Load() {
+		if !t.healthGateClosed.Load() {
+			return false // Binding, admission and explicit risk pauses stay closed.
+		}
 		// The public gate may have closed after an IP change. Probe privately so
 		// the original verified IP can recover without reopening a different IP.
 		private, closeProbe, err := t.privateProbe()
@@ -77,9 +80,11 @@ func (m *Manager) tunnelHealthy(t *Tunnel) bool {
 	}
 	if !healthy && ((got != "" && got != t.ExitIP) || (m.selection != nil && m.selection.blocked(got))) {
 		t.egressReady.Store(false)
+		t.healthGateClosed.Store(true)
 	}
-	if healthy && !(t.selectionPolicy().Mode == "strict" && t.riskMustRotate.Load()) {
+	if healthy && t.healthGateClosed.Load() && m.tunnelActive(t) && !(t.selectionPolicy().Mode == "strict" && t.riskMustRotate.Load()) {
 		t.egressReady.Store(true)
+		t.healthGateClosed.Store(false)
 	}
 	m.quality.record(t.Node.HostName, healthy, socks.LatencyMS)
 	t.mu.Lock()

@@ -423,6 +423,7 @@ func (m *Manager) tryNode(t *Tunnel) error {
 	t.nextRiskCheck = time.Time{}
 	t.mu.Unlock()
 	t.egressReady.Store(true)
+	t.healthGateClosed.Store(false)
 	m.quality.identify(t.Node.HostName, identity)
 	m.quality.record(t.Node.HostName, true, probe.LatencyMS)
 	return nil

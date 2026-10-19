@@ -43,6 +43,7 @@ type Tunnel struct {
 	Policy              SelectionPolicy `json:"selection"`
 	opMu                sync.Mutex
 	egressReady         atomic.Bool
+	healthGateClosed    atomic.Bool       // only health IP/exclusion checks may reopen this gate
 	Slot                int               `json:"slot"`
 	Port                int               `json:"port"`
 	Node                Node              `json:"node"`

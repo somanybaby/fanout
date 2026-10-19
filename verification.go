@@ -132,8 +132,16 @@ func (m *Manager) verificationHosts() []string {
 }
 
 func (m *Manager) enqueueVerification(now time.Time, hourly bool) (bool, error) {
-	hosts := m.verificationHosts()
 	s := m.verification
+	if hourly {
+		s.mu.Lock()
+		due := s.data.AutoHourly && !now.Before(s.data.NextRun) && s.loadErr == nil
+		s.mu.Unlock()
+		if !due {
+			return false, nil
+		}
+	}
+	hosts := m.verificationHosts()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.loadErr != nil {

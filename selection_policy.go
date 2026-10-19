@@ -27,6 +27,9 @@ func normalizePolicy(p SelectionPolicy, n Node) (SelectionPolicy, error) {
 		p.Country = n.CountryCode
 	}
 	p.Country = strings.ToUpper(p.Country)
+	if p.Country == "JP" && p.Mode == "auto" && !p.ProbeOnly && p.Region == "" && p.RegionCode == "" {
+		p.Region, p.RegionCode = "Tokyo", "13"
+	}
 	if !validRotation(p.RotateMinutes) || (p.Mode == "strict" && p.RotateMinutes > 0) {
 		return p, fmt.Errorf("轮换间隔无效，严格锁定时请关闭轮换")
 	}

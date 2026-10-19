@@ -73,10 +73,68 @@ func (m *Manager) checkRegionPreference(t *Tunnel, identity ExitIdentity) error 
 	if p.Mode == "strict" || p.ProbeOnly || t.allowRegionFallback || (p.Region == "" && p.RegionCode == "") {
 		return nil
 	}
+	// Preserve the saved working exit at restart even when its region is only
+	// a fallback. Country, exclusions, actual IP and risk are checked earlier.
+	if t.restoreFirst != nil && t.Node.HostName == t.restoreFirst.HostName {
+		return nil
+	}
 	if !sameRegion(p.Country, p.RegionCode, p.Region, identity.RegionCode, identity.Region) {
 		return &otherRegionError{}
 	}
 	return nil
+}
+
+func (m *Manager) SetRegionPreference(slot int, preference string) error {
+	m.mu.RLock()
+	t := m.tunnels[slot]
+	m.mu.RUnlock()
+	if t == nil || !t.opMu.TryLock() {
+		return fmt.Errorf("出口不存在或正在操作中")
+	}
+	defer t.opMu.Unlock()
+	p := t.selectionPolicy()
+	if p.Mode != "auto" || p.ProbeOnly {
+		return fmt.Errorf("请先选择自动模式，再设置地区偏好")
+	}
+	old := p
+	switch preference {
+	case "tokyo":
+		if p.Country != "JP" {
+			return fmt.Errorf("东京优先只适用于日本出口")
+		}
+		p.Region, p.RegionCode = "Tokyo", "13"
+	case "current":
+		t.mu.Lock()
+		p.Region, p.RegionCode = t.Identity.Region, t.Identity.RegionCode
+		t.mu.Unlock()
+		if p.Region == "" && p.RegionCode == "" {
+			return fmt.Errorf("当前出口尚无已核验的地区")
+		}
+	default:
+		return fmt.Errorf("地区偏好无效")
+	}
+	t.setPolicy(p)
+	if err := m.saveState(); err != nil {
+		t.setPolicy(old)
+		return err
+	}
+	m.selection.addEvent(SelectionEvent{Slot: slot, Kind: "region_preference", Reason: "修改优先地区为 " + p.Region + "；当前连接继续使用", Country: p.Country})
+	return nil
+}
+
+func apiRegionPreference(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, 405, map[string]string{"error": "使用 POST"})
+			return
+		}
+		slot, _ := strconv.Atoi(r.URL.Query().Get("slot"))
+		if err := m.SetRegionPreference(slot, r.URL.Query().Get("preference")); err != nil {
+			writeJSON(w, 409, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	}
 }
 func validRotation(minutes int) bool {
 	return minutes == 0 || minutes == 60 || minutes == 360 || minutes == 720 || minutes == 1440 || minutes == 2880

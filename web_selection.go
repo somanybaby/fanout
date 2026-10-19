@@ -45,6 +45,7 @@ function ipToolsOnExits(){
   const rotate=document.createElement('select');rotate.setAttribute('aria-label','出口 '+e.slot+' 的定时轮换');rotate.dataset.ipRotate=e.slot;
   [0,60,360,720,1440,2880].forEach(n=>{const o=document.createElement('option');o.value=n;o.textContent=n?'每 '+(n/60)+' 小时轮换':'关闭定时轮换';rotate.append(o)});rotate.value=p.rotate_minutes||0;rotate.disabled=p.mode==='strict';line.append(rotate);
   const history=document.createElement('button');history.textContent='切换记录';history.dataset.ipEvents=e.slot;line.append(history);
+  if(p.country==='JP'&&p.mode==='auto'){const tokyo=document.createElement('button');tokyo.textContent='东京优先';tokyo.dataset.ipTokyo=e.slot;tokyo.disabled=p.region_code==='13';line.append(tokyo)}
   b.closest('.exit').append(line);
  });
 }
@@ -95,6 +96,7 @@ $('#ip-apply').onclick=async e=>{if(!ipPicked)return;e.target.disabled=true;try{
 async function ipMark(ip,mark){await api('/api/ip/marks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({ip},mark))});await ipLoad(false)}
 document.addEventListener('change',async e=>{if(!e.target.dataset.ipRotate)return;const el=e.target;el.disabled=true;try{await api('/api/ip/rotation?slot='+el.dataset.ipRotate+'&minutes='+el.value,{method:'POST'});toast('轮换间隔已保存');poll()}catch(err){toast(err.message,true)}finally{el.disabled=false}});
 document.addEventListener('click',async e=>{
+ const tokyo=e.target.closest('[data-ip-tokyo]');if(tokyo){tokyo.disabled=true;try{await api('/api/ip/region?slot='+tokyo.dataset.ipTokyo+'&preference=tokyo',{method:'POST'});toast('已设为东京优先，当前连接继续使用');poll()}catch(err){tokyo.disabled=false;toast(err.message,true)}return}
  const open=e.target.closest('[data-ip-open]');if(open){ipOpen(Number(open.dataset.ipOpen));return}
  const hist=e.target.closest('[data-ip-events]');if(hist){$('#ip-history').classList.add('open');$('#ip-history-body').textContent='读取中…';try{const rows=await api('/api/ip/events?slot='+hist.dataset.ipEvents);$('#ip-history-body').innerHTML=rows.map(r=>'<div class="ip-info"><b>'+esc(ipTime(r.time))+'</b> · '+esc(r.country)+'<br>'+esc(r.reason)+'<br>'+esc(r.old_ip||'—')+' → '+esc(r.new_ip||'—')+'</div>').join('')||'暂无切换记录'}catch(err){$('#ip-history-body').textContent=err.message}return}
  const use=e.target.closest('[data-ip-use]');if(use){ipChoose(ipRows.find(n=>n.host===use.dataset.ipUse));return}

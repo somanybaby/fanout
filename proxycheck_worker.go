@@ -2,43 +2,32 @@ package main
 
 import (
 	"context"
-	"sort"
+	"strconv"
 	"time"
 )
 
 type proxycheckTarget struct {
 	ip     string
 	active bool
+	slot   string
 }
 
+// Only actual active exits whose IP changed are observed. Candidate lists,
+// health checks, trials and hourly reviews never generate ProxyCheck requests.
 func (m *Manager) proxycheckTargets() []proxycheckTarget {
 	targets := []proxycheckTarget{}
-	seen := map[string]bool{}
 	for _, t := range m.Tunnels() {
-		if t.Status == "up" && !t.selectionPolicy().ProbeOnly && t.ExitIP != "" && !seen[t.ExitIP] {
-			seen[t.ExitIP] = true
-			targets = append(targets, proxycheckTarget{t.ExitIP, true})
-		}
-	}
-	nodes, _ := m.Nodes()
-	for _, n := range nodes {
-		if n.CountryCode != "JP" || (residentialOnly() && !n.Residential) {
+		if t.Status != "up" || t.selectionPolicy().ProbeOnly || t.ExitIP == "" {
 			continue
 		}
-		identity := m.quality.snapshot(n.HostName).Identity
-		ip := identity.IP
-		if identity.Country != "JP" || ip == "" || seen[ip] || time.Since(identity.CheckedAt) > 6*time.Hour || m.selection.blocked(n.IP) || m.selection.blocked(ip) {
-			continue
+		slot := strconv.Itoa(t.Slot)
+		m.proxycheck.mu.Lock()
+		previous := m.proxycheck.data.ObservedExits[slot]
+		m.proxycheck.mu.Unlock()
+		if previous != t.ExitIP {
+			targets = append(targets, proxycheckTarget{ip: t.ExitIP, active: true, slot: slot})
 		}
-		seen[ip] = true
-		targets = append(targets, proxycheckTarget{ip, false})
 	}
-	sort.SliceStable(targets, func(i, j int) bool {
-		if targets[i].active != targets[j].active {
-			return targets[i].active
-		}
-		return m.proxycheck.snapshot(targets[i].ip).CheckedAt.Before(m.proxycheck.snapshot(targets[j].ip).CheckedAt)
-	})
 	return targets
 }
 
@@ -51,15 +40,31 @@ func (m *Manager) proxycheckSweep(ctx context.Context) {
 		return
 	}
 	for _, target := range m.proxycheckTargets() {
-		r := s.snapshot(target.ip)
-		due := r.ExpiresAt
-		if r.Status == "ok" {
-			due = r.CheckedAt.Add(time.Hour)
+		// Persist before querying to avoid periodic retry storms after a failure or
+		// restart. Replacing the key or re-enabling reference queries is explicit retry.
+		s.mu.Lock()
+		if s.data.ObservedExits[target.slot] == target.ip {
+			s.mu.Unlock()
+			continue
 		}
-		if !time.Now().Before(due) {
-			_, _ = s.assess(ctx, target.ip, target.active)
-			return // One serialized request per turn, active exits first.
+		now := time.Now()
+		r := s.data.Entries[target.ip]
+		cached := (r.Status == "ok" && now.Before(r.CheckedAt.Add(time.Hour))) || (r.Status != "ok" && now.Before(r.ExpiresAt))
+		if !cached {
+			s.pruneRequestsLocked(now)
+			if len(s.data.Requests) >= proxycheckDailyLimit || now.Before(s.data.BlockedUntil) || now.Sub(s.data.LastRequest) < 10*time.Second {
+				s.mu.Unlock()
+				return // Keep this IP change pending until a single query is permitted.
+			}
 		}
+		s.data.ObservedExits[target.slot] = target.ip
+		err := s.saveLocked()
+		s.mu.Unlock()
+		if err != nil {
+			return
+		}
+		_, _ = s.assess(ctx, target.ip, true)
+		return
 	}
 }
 

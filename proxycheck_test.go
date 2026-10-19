@@ -108,13 +108,13 @@ func TestProxycheckCacheQuotaReserveAndPrivatePersistence(t *testing.T) {
 	}
 }
 
-func TestProxycheckTargetsOnlyActualJapanAndActiveExits(t *testing.T) {
+func TestProxycheckTargetsOnlyChangedActiveExits(t *testing.T) {
 	m, current := selectionFixture(t)
 	m.quality.identify("tokyo", ExitIdentity{IP: "9.9.9.9", Country: "JP", CheckedAt: time.Now()})
 	m.quality.identify("osaka", ExitIdentity{IP: "8.8.8.8", Country: "US", CheckedAt: time.Now()})
 	m.quality.identify("foreign", ExitIdentity{IP: "4.4.4.4", Country: "KR", CheckedAt: time.Now()})
 	targets := m.proxycheckTargets()
-	if len(targets) != 2 || !targets[0].active || targets[0].ip != current.ExitIP || targets[1].ip != "9.9.9.9" {
+	if len(targets) != 1 || !targets[0].active || targets[0].ip != current.ExitIP {
 		t.Fatalf("queried advertised, foreign or wrong-country IP: %+v", targets)
 	}
 	configureProxycheckTest(t, m.proxycheck)

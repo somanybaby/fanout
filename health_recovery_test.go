@@ -8,10 +8,10 @@ import (
 	"time"
 )
 
-func TestHealthRecoveryPreservesLiveTunnelWhenAdmissionUnavailable(t *testing.T) {
+func TestHealthRecoveryPreservesLiveTunnelWhenIPPureUnavailable(t *testing.T) {
 	for _, mode := range []string{"auto", "strict"} {
 		t.Run(mode, func(t *testing.T) {
-			m, tn := admissionFixture(t)
+			m, tn := selectionRiskFixture(t)
 			tn.Policy.Mode = mode
 			tn.egressReady.Store(true)
 			tn.lastVerifiedIP = tn.ExitIP
@@ -22,8 +22,10 @@ func TestHealthRecoveryPreservesLiveTunnelWhenAdmissionUnavailable(t *testing.T)
 			t.Cleanup(func() { _ = process.Process.Kill(); _ = process.Wait() })
 			tn.ovpn = process
 			m.proxycheck.data.BlockedUntil = time.Now().Add(time.Hour)
+			m.risk.data.LastRequest = time.Now()
+			m.risk.data.Window = time.Now()
 			m.proxycheck.fetch = func(_ context.Context, _, _ string) ([]byte, error) {
-				t.Error("provider cooldown was bypassed")
+				t.Error("health recovery unexpectedly queried reference-only ProxyCheck")
 				return nil, nil
 			}
 			beforeNode, beforeIP, beforeCred := tn.Node.HostName, tn.ExitIP, tn.Cred
@@ -31,7 +33,7 @@ func TestHealthRecoveryPreservesLiveTunnelWhenAdmissionUnavailable(t *testing.T)
 			deadline := time.Now().Add(2 * time.Second)
 			for !tn.opMu.TryLock() {
 				if time.Now().After(deadline) {
-					t.Fatal("recovery opened a candidate VPN despite unavailable admission")
+					t.Fatal("recovery opened a candidate VPN despite IPPure cooldown")
 				}
 				time.Sleep(time.Millisecond)
 			}

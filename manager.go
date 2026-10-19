@@ -233,38 +233,11 @@ func (m *Manager) bringUpPersist(t *Tunnel, notify bool, persist bool) {
 
 // tryCandidates 走一轮候选节点，成功返回 true。失败不改 Status（留给调用方决定）。
 func (m *Manager) tryCandidates(t *Tunnel, notify bool) bool {
-	p := t.selectionPolicy()
-	t.deferredLowPC = map[string]bool{}
-	t.allowLowProxycheck = p.AllowPCLow || (p.Mode != "auto" && !p.RequirePCZero)
-	defer func() { t.allowLowProxycheck = false; t.deferredLowPC = nil }()
-	if m.tryRegionCandidates(t, notify) {
-		return true
-	}
-	if !m.proxycheck.admissionEnabled() || p.RequirePCZero || t.allowLowProxycheck || len(t.deferredLowPC) == 0 {
-		return false
-	}
-	t.allowLowProxycheck = true
 	return m.tryRegionCandidates(t, notify)
 }
 
 func (m *Manager) tryRegionCandidates(t *Tunnel, notify bool) bool {
 	candidates := m.candidatesFor(t)
-	if m.proxycheck.admissionEnabled() && !t.allowLowProxycheck && t.selectionPolicy().Mode == "auto" {
-		for _, n := range candidates {
-			if m.nodeProxycheckRank(n) == 2 {
-				t.deferredLowPC[n.HostName] = true
-			}
-		}
-	}
-	if m.proxycheck.admissionEnabled() && t.allowLowProxycheck && !t.selectionPolicy().AllowPCLow && t.selectionPolicy().Mode == "auto" {
-		low := []Node{}
-		for _, n := range candidates {
-			if t.deferredLowPC[n.HostName] {
-				low = append(low, n)
-			}
-		}
-		candidates = low
-	}
 	deferred := []Node{}
 	for phase := 0; phase < 2; phase++ {
 		if phase == 1 {
@@ -272,10 +245,6 @@ func (m *Manager) tryRegionCandidates(t *Tunnel, notify bool) bool {
 		}
 		t.allowRegionFallback = phase == 1
 		for i, node := range candidates {
-			verifiedHandoff := t.handoffVerified && t.restoreFirst != nil && node.HostName == t.restoreFirst.HostName
-			if m.proxycheck.admissionEnabled() && !t.allowLowProxycheck && !verifiedHandoff && t.selectionPolicy().Mode == "auto" && m.nodeProxycheckRank(node) == 2 {
-				continue
-			}
 			if !m.tunnelActive(t) {
 				return false
 			}
@@ -310,13 +279,7 @@ func (m *Manager) tryRegionCandidates(t *Tunnel, notify bool) bool {
 			t.Err = err.Error()
 			var outside *otherRegionError
 			var waiting *riskWaitError
-			var pcLow *proxycheckLowScore
-			var pcWait *proxycheckAdmissionWait
 			switch {
-			case errors.As(err, &pcLow):
-				t.deferredLowPC[node.HostName] = true
-			case errors.As(err, &pcWait):
-				t.retryAfter = pcWait.Until
 			case errors.As(err, &outside):
 				deferred = append(deferred, node)
 			case errors.As(err, &waiting):
@@ -330,7 +293,7 @@ func (m *Manager) tryRegionCandidates(t *Tunnel, notify bool) bool {
 				t.ovpn = nil
 			}
 			t.teardownNetns()
-			if waiting != nil || pcWait != nil {
+			if waiting != nil {
 				break
 			}
 		}
@@ -386,7 +349,7 @@ func (m *Manager) tryNode(t *Tunnel) error {
 	if err := m.checkExitPolicy(t, ip, identity.Country); err != nil {
 		return err
 	}
-	if err := m.verifyCandidateRisks(t, probeTunnel, ip, identity.Country); err != nil {
+	if err := m.verifyRisk(t, probeTunnel, ip, identity.Country); err != nil {
 		return err
 	}
 	if riskFilterEnabled() {

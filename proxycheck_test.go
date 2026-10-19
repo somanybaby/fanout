@@ -24,6 +24,14 @@ func configureProxycheckTest(t *testing.T, s *proxycheckStore) string {
 }
 
 func TestProxycheckV3ParseAndIndependentScore(t *testing.T) {
+	live := `{"status":"ok","1.1.1.1":{"detections":{"risk":50,"anonymous":true,"proxy":false,"vpn":true,"hosting":false,"tor":false}}}`
+	if r, err := parseProxycheck([]byte(live), "1.1.1.1", time.Now()); err != nil || r.Score == nil || *r.Score != 50 {
+		t.Fatal("live nested risk schema rejected")
+	}
+	conflicting := strings.Replace(live, `"detections":`, `"risk":4,"detections":`, 1)
+	if _, err := parseProxycheck([]byte(conflicting), "1.1.1.1", time.Now()); err == nil {
+		t.Fatal("conflicting schema scores accepted")
+	}
 	for _, score := range []string{"0", "10", "20", "50", "100"} {
 		r, err := parseProxycheck(proxycheckFixtureJSON("1.1.1.1", score), "1.1.1.1", time.Now())
 		if err != nil || r.Status != "ok" || r.Score == nil || r.VPN == nil || !*r.VPN || *r.Proxy || r.NetworkType != "Residential" {

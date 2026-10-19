@@ -150,6 +150,7 @@ func main() {
 	mux.HandleFunc("/api/ip/trial", apiTrialIP(mgr))
 	mux.HandleFunc("/api/ip/risk", apiRiskSettings(mgr))
 	mux.HandleFunc("/api/ip/rotation", apiRotation(mgr))
+	mux.HandleFunc("/api/ip/region", apiRegionPreference(mgr))
 	mux.HandleFunc("/api/ip/verification", apiVerification(mgr))
 	mux.HandleFunc("/api/ip/proxycheck", apiProxycheck(mgr))
 	mux.HandleFunc("/api/tunnels", apiTunnels(mgr))

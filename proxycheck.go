@@ -216,6 +216,7 @@ func parseProxycheck(blob []byte, ip string, now time.Time) (ProxycheckResult, e
 			Country string `json:"isocode"`
 		} `json:"location"`
 		Detections struct {
+			Risk       *float64 `json:"risk"`
 			Anonymous  *bool    `json:"anonymous"`
 			Proxy      *bool    `json:"proxy"`
 			VPN        *bool    `json:"vpn"`
@@ -224,7 +225,18 @@ func parseProxycheck(blob []byte, ip string, now time.Time) (ProxycheckResult, e
 			Confidence *float64 `json:"confidence"`
 		} `json:"detections"`
 	}
-	if (status != "ok" && status != "warning") || json.Unmarshal(envelope[ip], &raw) != nil || raw.Score == nil || math.IsNaN(*raw.Score) || *raw.Score < 0 || *raw.Score > 100 || raw.Detections.Anonymous == nil || raw.Detections.Proxy == nil || raw.Detections.VPN == nil || raw.Detections.Hosting == nil || raw.Detections.Tor == nil {
+	if json.Unmarshal(envelope[ip], &raw) != nil {
+		return r, fmt.Errorf("ProxyCheck 未返回查询 IP 的有效数据")
+	}
+	// The live v3 API nests risk in detections; some published schemas put it
+	// at the IP's top level. Accept either location, reject conflicting scores.
+	if raw.Score != nil && raw.Detections.Risk != nil && *raw.Score != *raw.Detections.Risk {
+		return r, fmt.Errorf("ProxyCheck 返回的风险分不一致")
+	}
+	if raw.Score == nil {
+		raw.Score = raw.Detections.Risk
+	}
+	if (status != "ok" && status != "warning") || raw.Score == nil || math.IsNaN(*raw.Score) || *raw.Score < 0 || *raw.Score > 100 || raw.Detections.Anonymous == nil || raw.Detections.Proxy == nil || raw.Detections.VPN == nil || raw.Detections.Hosting == nil || raw.Detections.Tor == nil {
 		return r, fmt.Errorf("ProxyCheck 未返回与查询 IP 一致的有效评分和标记")
 	}
 	r.Score, r.NetworkType, r.Country = raw.Score, raw.Network.Type, raw.Location.Country

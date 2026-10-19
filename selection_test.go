@@ -48,6 +48,40 @@ func TestSelectionStrictNeverFallsBackOrCrossesCountry(t *testing.T) {
 		t.Fatal("excluded strict target caused a fallback")
 	}
 }
+
+func TestSelectionTokyoPreferenceUpdatesWithoutReconnectAndSurvivesRestore(t *testing.T) {
+	m, tn := selectionFixture(t)
+	tn.Policy.Region, tn.Policy.RegionCode, tn.Policy.RotateMinutes = "Kanagawa", "14", 1440
+	tn.Identity = ExitIdentity{IP: tn.ExitIP, Country: "JP", Region: "Kanagawa", RegionCode: "14"}
+	tn.egressReady.Store(true)
+	before := tn.Cred
+	if err := m.SetRegionPreference(1, "tokyo"); err != nil {
+		t.Fatal(err)
+	}
+	if tn.Policy.RegionCode != "13" || tn.Policy.Region != "Tokyo" || tn.Policy.RotateMinutes != 1440 || tn.Cred != before || tn.Status != "up" || tn.ExitIP != "1.1.1.1" || !tn.egressReady.Load() {
+		t.Fatal("preference interrupted or changed the working exit")
+	}
+	if m.checkRegionPreference(tn, tn.Identity) == nil {
+		t.Fatal("other-region candidate bypassed Tokyo priority")
+	}
+	saved := tn.Node
+	tn.restoreFirst = &saved
+	if m.checkRegionPreference(tn, tn.Identity) != nil {
+		t.Fatal("restart rejected the saved working fallback region")
+	}
+	tn.Node = m.nodes[2]
+	if m.checkRegionPreference(tn, tn.Identity) == nil {
+		t.Fatal("restore exception leaked to other candidates")
+	}
+	p, err := normalizePolicy(SelectionPolicy{}, m.nodes[1])
+	if err != nil || p.RegionCode != "13" {
+		t.Fatal("new Japanese automatic exit lacks Tokyo preference")
+	}
+	p, err = normalizePolicy(SelectionPolicy{}, m.nodes[3])
+	if err != nil || p.RegionCode != "" {
+		t.Fatal("Tokyo preference affected another country")
+	}
+}
 func TestSelectionPreferredRetainsAnchorAndFallsBackSameCountry(t *testing.T) {
 	m, tn := selectionFixture(t)
 	p, err := normalizePolicy(SelectionPolicy{Mode: "preferred", IP: "2.2.2.2", Region: "Tokyo", RegionCode: "13"}, m.nodes[1])

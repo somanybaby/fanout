@@ -12,27 +12,31 @@ import (
 
 // Manager 维护所有隧道，负责分配槽位与端口。
 type Manager struct {
-	stateMu   sync.Mutex
-	selection *selectionStore
-	risk      *riskStore
-	mu        sync.RWMutex
-	tunnels   map[int]*Tunnel
-	nodes     []Node
-	fetched   time.Time
-	workDir   string
-	maxSlots  int
-	jobs      JobStore
-	quality   *qualityStore
+	verification *verificationStore
+	probes       map[int]*Tunnel // isolated batch probes; never client exits
+	stateMu      sync.Mutex
+	selection    *selectionStore
+	risk         *riskStore
+	mu           sync.RWMutex
+	tunnels      map[int]*Tunnel
+	nodes        []Node
+	fetched      time.Time
+	workDir      string
+	maxSlots     int
+	jobs         JobStore
+	quality      *qualityStore
 }
 
 func NewManager(maxSlots int, workDir string) *Manager {
 	return &Manager{
-		tunnels:   map[int]*Tunnel{},
-		workDir:   workDir,
-		maxSlots:  maxSlots,
-		quality:   newQualityStore(workDir),
-		selection: newSelectionStore(workDir),
-		risk:      newRiskStore(workDir),
+		verification: newVerificationStore(workDir),
+		probes:       map[int]*Tunnel{},
+		tunnels:      map[int]*Tunnel{},
+		workDir:      workDir,
+		maxSlots:     maxSlots,
+		quality:      newQualityStore(workDir),
+		selection:    newSelectionStore(workDir),
+		risk:         newRiskStore(workDir),
 	}
 }
 
@@ -83,7 +87,7 @@ func (m *Manager) Tunnels() []*Tunnel {
 // freeSlot 找一个未占用的槽位。槽位同时决定端口与网段。
 func (m *Manager) freeSlot() (int, error) {
 	for i := 1; i <= m.maxSlots; i++ {
-		if _, used := m.tunnels[i]; !used {
+		if _, used := m.tunnels[i]; !used && m.probes[i] == nil {
 			return i, nil
 		}
 	}
@@ -102,6 +106,12 @@ func (m *Manager) StartSelected(node Node, policy SelectionPolicy) (*Tunnel, err
 	}
 
 	m.mu.Lock()
+	for _, probe := range m.probes {
+		if probe.Node.HostName == node.HostName {
+			m.mu.Unlock()
+			return nil, fmt.Errorf("该节点正在批量核验，请稍后再试")
+		}
+	}
 	for _, other := range m.tunnels {
 		if other.Node.HostName == node.HostName {
 			m.mu.Unlock()
@@ -571,6 +581,7 @@ func (m *Manager) syncCred(t *Tunnel) {
 
 // Shutdown 停掉运行态但保留状态文件，让下次启动能恢复同样的隧道。
 func (m *Manager) Shutdown() {
+	m.verification.stop()
 	for _, t := range m.Tunnels() {
 		t.stop()
 	}

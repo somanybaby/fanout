@@ -177,7 +177,7 @@ func (m *Manager) policyCandidates(t *Tunnel) []Node {
 		if len(candidates) >= limit {
 			break
 		}
-		if region == "" || !strings.EqualFold(n.CountryCode, region) || avoid[n.HostName] {
+		if region == "" || !strings.EqualFold(n.CountryCode, region) || (avoid[n.HostName] && n.HostName != first.HostName) {
 			continue
 		}
 		add(n)

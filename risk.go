@@ -3,10 +3,12 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -26,10 +28,11 @@ type RiskAssessment struct {
 	ExpiresAt  time.Time `json:"expires_at"`
 }
 type riskData struct {
-	Entries     map[string]RiskAssessment `json:"entries"`
-	LastRequest time.Time                 `json:"last_request"`
-	Window      time.Time                 `json:"window"`
-	Requests    int                       `json:"requests"`
+	BlockedUntil time.Time                 `json:"blocked_until"`
+	Entries      map[string]RiskAssessment `json:"entries"`
+	LastRequest  time.Time                 `json:"last_request"`
+	Window       time.Time                 `json:"window"`
+	Requests     int                       `json:"requests"`
 }
 type riskStore struct {
 	mu      sync.Mutex
@@ -57,11 +60,19 @@ func newRiskStore(dir string) *riskStore {
 		s.data.Entries = map[string]RiskAssessment{}
 	}
 	s.fetch = func(t *Tunnel) ([]byte, error) {
-		p, b := getProbe(proxyHTTPClient(t.Port, t.credential(), healthTimeout), "https://my.ippure.com/v1/info", 200)
-		if !p.OK {
+		client := proxyHTTPClient(t.Port, t.credential(), healthTimeout)
+		resp, err := client.Get("https://my.ippure.com/v1/info")
+		if err != nil {
+			return nil, fmt.Errorf("IPPure 暂不可用")
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode == 429 || resp.StatusCode == 503 {
+			return nil, &riskWaitError{Until: riskRetryAfter(resp.Header.Get("Retry-After"), time.Now())}
+		}
+		if resp.StatusCode != 200 {
 			return nil, fmt.Errorf("IPPure 暂不可用或被限频")
 		}
-		return b, nil
+		return io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	}
 	return s
 }
@@ -129,6 +140,9 @@ func (s *riskStore) assess(t *Tunnel, ip string) (RiskAssessment, error) {
 	if s.data.Requests >= 12 {
 		until = s.data.Window.Add(time.Hour)
 	}
+	if s.data.BlockedUntil.After(until) {
+		until = s.data.BlockedUntil
+	}
 	if now.Before(until) {
 		s.mu.Unlock()
 		return RiskAssessment{}, &riskWaitError{Until: until}
@@ -151,12 +165,30 @@ func (s *riskStore) assess(t *Tunnel, ip string) (RiskAssessment, error) {
 		r = RiskAssessment{IP: ip, Status: "unknown", CheckedAt: now, ExpiresAt: now.Add(5 * time.Minute)}
 	}
 	s.mu.Lock()
+	if wait, ok := err.(*riskWaitError); ok {
+		s.data.BlockedUntil = wait.Until
+	}
+	for key, v := range s.data.Entries {
+		if now.Sub(v.CheckedAt) > 24*time.Hour {
+			delete(s.data.Entries, key)
+		}
+	}
 	s.data.Entries[ip] = r
 	if s.path != "" {
 		_ = atomicPrivateJSON(s.path, s.data)
 	}
 	s.mu.Unlock()
 	return r, err
+}
+
+func riskRetryAfter(raw string, now time.Time) time.Time {
+	if seconds, err := strconv.Atoi(raw); err == nil && seconds > 0 {
+		return now.Add(time.Duration(seconds) * time.Second)
+	}
+	if at, err := http.ParseTime(raw); err == nil && at.After(now) {
+		return at
+	}
+	return now.Add(10 * time.Minute)
 }
 func (m *Manager) verifyRisk(t, probe *Tunnel, ip, country string) error {
 	if !riskFilterEnabled() {

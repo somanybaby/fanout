@@ -7,14 +7,14 @@ const selectionHTML = `
 <div class="modal" id="ip-browser"><div class="sheet" style="width:min(96vw,1180px);max-width:1180px"><div class="head"><h2>选择出口 IP</h2><span class="spacer"></span><button id="ip-close">关闭</button></div><div class="body">
  <div class="ip-tools"><select id="ip-target" aria-label="选用到哪个出口"></select><select id="ip-country" aria-label="筛选国家"></select><input id="ip-search" type="search" placeholder="搜索 IP、运营商、地区"><select id="ip-filter" aria-label="筛选状态"><option value="all">全部候选</option><option value="favorite">已收藏</option><option value="blocked">已排除</option></select><select id="ip-sort" aria-label="排序"><option value="quality">实测质量优先</option><option value="latency">HTTPS 耗时优先</option><option value="favorite">收藏优先</option></select><button id="ip-reload">刷新目录</button></div>
  <div class="ip-note">公布地址用于连接 VPN，实际出口需试连核验。测速是服务器经出口访问 HTTPS 的耗时，不能代表手机延迟。地区以 IP 定位为准，可能存在偏差。</div>
- <div class="ip-info"><label><input type="checkbox" id="ip-risk"> 启用 IPPure 风险筛选：仅接入风险分 &lt;10 的出口</label><div class="ip-note">仅在启用新出口前查询；缓存 30 分钟，低频访问公开 API。查询失败、字段缺失或分数 ≥10 均不放行。评分不保证 AI 或影视解锁。当前正在使用的出口不立即切换。</div></div>
+ <div class="ip-info"><label><input type="checkbox" id="ip-risk"> 启用 IPPure 风险筛选：仅接入风险分 &lt;10 的出口</label><div class="ip-note">新出口必须低于 10；当前 IP 每 60 分钟复查，高于 20 才提前轮换。默认每 24 小时轮换。先核验同地区、再同国候选；查询失败保留当前出口并重试。缓存 30 分钟，低频访问公开 API；评分不保证 AI 或影视解锁。</div></div>
  <div id="ip-status" class="ip-note" aria-live="polite"></div><div class="ip-scroll"><table class="ip-table"><thead><tr><th>IP / 状态</th><th>国家 / 地区</th><th>运营商 / 风险分</th><th>实测与历史</th><th>操作</th></tr></thead><tbody id="ip-rows"></tbody></table></div>
  <details><summary>收藏与排除记录（包含已离开目录的 IP）</summary><div id="ip-marks"></div></details>
 </div></div></div>
 <div class="modal" id="ip-choice"><div class="sheet"><div class="head"><h2>选用 IP</h2><span class="spacer"></span><button id="ip-choice-close">取消</button></div><div class="body"><div id="ip-choice-info" class="ip-info"></div>
  <label class="f"><span>选择模式</span><select id="ip-mode"><option value="preferred">首选 IP，失效后允许同国接替</option><option value="strict">严格锁定 IP，失效后暂停并重试</option><option value="auto">自动选择，同地区优先、同国备用</option></select></label>
  <label class="f" id="ip-expected-wrap"><span>预期的实际出口 IPv4</span><input id="ip-expected" placeholder="建议先试连，取得实际出口 IP"><small>首选节点的实际出口不匹配时会尝试同国备用；严格锁定时始终拒绝其他 IP。</small></label>
- <label class="f" id="ip-new-rotation-wrap"><span>定时轮换</span><select id="ip-new-rotation"><option value="60">每 60 分钟轮换</option><option value="30">每 30 分钟轮换</option><option value="120">每 120 分钟轮换</option><option value="360">每 360 分钟轮换</option><option value="0">关闭定时轮换</option></select></label>
+ <label class="f" id="ip-new-rotation-wrap"><span>定时轮换</span><select id="ip-new-rotation"><option value="1440">每 24 小时轮换</option><option value="60">每 1 小时轮换</option><option value="360">每 6 小时轮换</option><option value="720">每 12 小时轮换</option><option value="2880">每 48 小时轮换</option><option value="0">关闭定时轮换</option></select></label>
  <label class="f" id="ip-template-wrap"><span>创建节点链接</span><select id="ip-template"></select><small>按模板复制新入站；原直连的端口和凭据保持。</small></label>
  <div class="ip-note">定时轮换可在出口下设置。严格锁定时轮换关闭；查无合格出口时保持阻断。</div><div id="ip-choice-error" class="errline" aria-live="polite"></div>
  </div><div class="foot"><span class="spacer"></span><button class="primary" id="ip-apply">选用</button></div></div></div>
@@ -23,7 +23,7 @@ const selectionHTML = `
 let ipRows=[],ipMarks={},ipPicked=null,ipRefreshing=false;
 const ipModeLabel=p=>({auto:'自动选择',preferred:'首选 IP',strict:'严格锁定'})[(p||{}).mode]||'自动选择';
 const ipTime=v=>v&&!v.startsWith('0001')?new Date(v).toLocaleString():'尚未检测';
-const ipRiskLabel=r=>r&&r.score!==null&&r.score!==undefined?String(r.score)+(r.expires_at&&new Date(r.expires_at)<new Date()?' · 已过期，接入前重查':r.status==='pass'?' · 合格':' · 不合格'):'未查询';
+const ipRiskLabel=r=>r&&r.score!==null&&r.score!==undefined?String(r.score)+(r.expires_at&&new Date(r.expires_at)<new Date()?' · 已过期，接入前重查':r.status==='pass'?' · 可接入':' · 新候选不接入'):'未查询';
 const ipHours=n=>n>0?(n/3600).toFixed(1)+' 小时':'—';
 function ipToolsOnExits(){
  document.querySelectorAll('[data-swap]').forEach(b=>{
@@ -34,7 +34,7 @@ function ipToolsOnExits(){
   const line=document.createElement('div');line.className='ip-mini';const p=e.selection||{};
   const info=document.createElement('span');info.className='ip-note';info.textContent=ipModeLabel(p)+(p.ip?' · '+p.ip:'')+' · 地区优先：'+(p.region||'首次连接后定位')+' · 风险分：'+ipRiskLabel(e.risk);line.append(info);
   const rotate=document.createElement('select');rotate.setAttribute('aria-label','出口 '+e.slot+' 的定时轮换');rotate.dataset.ipRotate=e.slot;
-  [0,30,60,120,360].forEach(n=>{const o=document.createElement('option');o.value=n;o.textContent=n?'每 '+n+' 分钟轮换':'关闭定时轮换';rotate.append(o)});rotate.value=p.rotate_minutes||0;rotate.disabled=p.mode==='strict';line.append(rotate);
+  [0,60,360,720,1440,2880].forEach(n=>{const o=document.createElement('option');o.value=n;o.textContent=n?'每 '+(n/60)+' 小时轮换':'关闭定时轮换';rotate.append(o)});rotate.value=p.rotate_minutes||0;rotate.disabled=p.mode==='strict';line.append(rotate);
   const history=document.createElement('button');history.textContent='切换记录';history.dataset.ipEvents=e.slot;line.append(history);
   b.closest('.exit').append(line);
  });
@@ -73,7 +73,7 @@ function ipChoiceMode(){const locked=$('#ip-mode').value==='strict';$('#ip-new-r
 $('#ip-mode').onchange=ipChoiceMode;
 async function ipChoose(n){
  ipPicked=n;$('#ip-choice-info').textContent=(n.identity.ip||n.ip||n.host)+' · '+n.country_name+' · '+(n.identity.region||'地区待核验');$('#ip-choice-error').textContent='';$('#ip-expected').value=n.identity.ip||n.ip||'';$('#ip-mode').value='preferred';ipChoiceMode();
- const slot=Number($('#ip-target').value);$('#ip-template-wrap').hidden=slot>0;$('#ip-new-rotation-wrap').hidden=slot>0;if(slot===0)$('#ip-new-rotation').value=$('#ip-mode').value==='strict'?'0':'60';
+ const slot=Number($('#ip-target').value);$('#ip-template-wrap').hidden=slot>0;$('#ip-new-rotation-wrap').hidden=slot>0;if(slot===0)$('#ip-new-rotation').value=$('#ip-mode').value==='strict'?'0':'1440';
  const ibs=(view.direct||[]).concat(view.exits.flatMap(e=>e.inbounds||[]));$('#ip-template').innerHTML='<option value="0">只开出口，不创建节点链接</option>'+ibs.map(i=>'<option value="'+i.id+'">按 '+esc(i.remark||i.protocol)+' :'+i.port+' 复制节点链接</option>').join('');$('#ip-choice').classList.add('open');
 }
 $('#ip-apply').onclick=async e=>{if(!ipPicked)return;e.target.disabled=true;try{const r=await api('/api/ip/select',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({slot:Number($('#ip-target').value),host:ipPicked.host,mode:$('#ip-mode').value,ip:$('#ip-expected').value.trim(),template_id:Number($('#ip-template').value),rotate_minutes:Number($('#ip-new-rotation').value)})});$('#ip-choice').classList.remove('open');$('#ip-browser').classList.remove('open');toast('正在按规则核验出口，结果见出口和切换记录');poll()}catch(err){$('#ip-choice-error').textContent=err.message}finally{e.target.disabled=false}};

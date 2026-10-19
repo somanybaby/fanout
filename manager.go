@@ -364,6 +364,10 @@ func (m *Manager) tryNode(t *Tunnel) error {
 			return err
 		}
 	}
+	t.riskMustRotate.Store(false)
+	t.mu.Lock()
+	t.nextRiskCheck = time.Time{}
+	t.mu.Unlock()
 	t.egressReady.Store(true)
 	m.quality.identify(t.Node.HostName, identity)
 	m.quality.record(t.Node.HostName, true, probe.LatencyMS)

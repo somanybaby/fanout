@@ -252,3 +252,20 @@ func TestSelectionHealthyTimerRunsPreflightWithoutDroppingExit(t *testing.T) {
 		t.Fatal("strict timer ran")
 	}
 }
+
+func TestSelectionCurrentNodeOutsidePublishedSampleIsRetained(t *testing.T) {
+	m, tn := selectionFixture(t)
+	m.nodes = m.nodes[1:]
+	found := false
+	for _, n := range m.candidatesFor(tn) {
+		if n.HostName == tn.Node.HostName {
+			found = true
+			if n.Config != tn.Node.Config {
+				t.Fatal("saved current config lost")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("current node disappeared with the public sample")
+	}
+}

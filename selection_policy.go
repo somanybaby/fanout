@@ -148,6 +148,16 @@ func (m *Manager) policyCandidates(t *Tunnel) []Node {
 		add(first)
 	}
 	pool := m.nodePoolLocked()
+	foundFirst := false
+	for _, n := range pool {
+		if n.HostName == first.HostName {
+			foundFirst = true
+			break
+		}
+	}
+	if !foundFirst {
+		pool = append([]Node{first}, pool...)
+	}
 	// Known same-region candidates precede unknown locations, then known other
 	// regions. Unknown candidates are privately verified before region fallback.
 	sort.SliceStable(pool, func(i, j int) bool {
@@ -172,8 +182,30 @@ func (m *Manager) policyCandidates(t *Tunnel) []Node {
 		}
 		add(n)
 	}
-	if anchored && (firstInfo.Region != "" || firstInfo.RegionCode != "") && len(candidates) < limit {
+	if anchored && (firstInfo.Region != "" || firstInfo.RegionCode != "") {
 		add(first)
+	}
+	// Reserve a bounded fallback even when same/unknown-region candidates fill
+	// the primary budget. Admission still waits until the second region phase.
+	if anchored {
+		fallbackCount := 0
+		for _, n := range pool {
+			info := m.quality.snapshot(n.HostName).Identity
+			if info.Region == "" && info.RegionCode == "" {
+				continue
+			}
+			if !strings.EqualFold(n.CountryCode, region) || sameRegion(region, p.RegionCode, p.Region, info.RegionCode, info.Region) {
+				continue
+			}
+			if fallbackCount >= 2 {
+				break
+			}
+			before := len(candidates)
+			add(n)
+			if len(candidates) > before {
+				fallbackCount++
+			}
+		}
 	}
 	return candidates
 }

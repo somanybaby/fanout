@@ -3,13 +3,15 @@ package main
 import (
 	"fmt"
 	"log"
+	"syscall"
 	"time"
 )
 
 const (
-	healthInterval = 10 * time.Second
-	healthFailures = 2 // 连续失败几次才判定掉线，避免网络抖动误杀
-	healthTimeout  = 6 * time.Second
+	healthInterval       = 10 * time.Second
+	healthFailures       = 3 // HTTP 探测连续失败后预检接替节点，避免短时抖动拆掉原隧道
+	healthTimeout        = 6 * time.Second
+	healthRecoveryReason = "连续三次健康检查失败"
 )
 
 // WatchHealth 周期检查每条隧道是否还能出网，掉线的自动换节点重连。
@@ -35,7 +37,7 @@ func (m *Manager) WatchHealth() {
 				continue
 			}
 
-			log.Printf("隧道 %d (%s) 已掉线，正在换节点重连", t.Slot, t.Node.HostName)
+			log.Printf("隧道 %d (%s) 持续探测失败，检查恢复方案", t.Slot, t.Node.HostName)
 			fails[t.Slot] = 0
 			m.reconnect(t, t.Node.HostName)
 		}
@@ -48,10 +50,21 @@ func (m *Manager) WatchHealth() {
 // openvpn 死掉后照样能出网，只是出口变回了母机 IP。
 // 所以要比对出口 IP 是否仍是建立隧道时拿到的那个。
 func (m *Manager) tunnelHealthy(t *Tunnel) bool {
-	socks, got := probeSOCKSExit(t)
+	probe := t
+	if !t.egressReady.Load() {
+		// The public gate may have closed after an IP change. Probe privately so
+		// the original verified IP can recover without reopening a different IP.
+		private, closeProbe, err := t.privateProbe()
+		if err != nil {
+			return false
+		}
+		defer closeProbe()
+		probe = private
+	}
+	socks, got := probeSOCKSExit(probe)
 	web := ProbeResult{Detail: "SOCKS 出口验证未通过"}
 	if socks.OK && got == t.ExitIP {
-		web = probeWeb(t)
+		web = probeWeb(probe)
 	} else {
 		socks.OK = false
 		socks.Detail = "出口失效或发生变化"
@@ -64,6 +77,9 @@ func (m *Manager) tunnelHealthy(t *Tunnel) bool {
 	}
 	if !healthy && ((got != "" && got != t.ExitIP) || (m.selection != nil && m.selection.blocked(got))) {
 		t.egressReady.Store(false)
+	}
+	if healthy && !(t.selectionPolicy().Mode == "strict" && t.riskMustRotate.Load()) {
+		t.egressReady.Store(true)
 	}
 	m.quality.record(t.Node.HostName, healthy, socks.LatencyMS)
 	t.mu.Lock()
@@ -86,7 +102,30 @@ func (m *Manager) reconnect(t *Tunnel, oldHost string) {
 		t.opMu.Unlock()
 		return
 	}
-	m.launchReconnect(t, oldHost, t.ExitIP, "连续两次健康检查失败")
+	if time.Since(t.lastRecoveryAttempt) < time.Minute {
+		t.opMu.Unlock()
+		return
+	}
+	t.lastRecoveryAttempt = time.Now()
+	// HTTP failure alone does not prove the VPN process is dead. Keep it and
+	// its routes intact until a replacement passes the normal admission gates.
+	if t.ovpn != nil && t.ovpn.Process != nil && t.ovpn.Process.Signal(syscall.Signal(0)) == nil {
+		p := t.selectionPolicy()
+		if p.Mode == "strict" {
+			m.selection.addEvent(SelectionEvent{Slot: t.Slot, Kind: "recovery_wait", Reason: "严格锁定：保留原隧道等待恢复，不更换其他 IP", Country: p.Country, OldIP: t.ExitIP})
+			t.opMu.Unlock()
+			return
+		}
+		node, err := m.pickSwapTarget(t)
+		if err != nil {
+			m.selection.addEvent(SelectionEvent{Slot: t.Slot, Kind: "recovery_wait", Reason: "暂无同国接替候选，保留原隧道等待恢复", Country: p.Country, OldIP: t.ExitIP})
+			t.opMu.Unlock()
+			return
+		}
+		m.prepareSwitch(t, node, p, healthRecoveryReason)
+		return
+	}
+	m.launchReconnect(t, oldHost, t.ExitIP, healthRecoveryReason)
 }
 
 // Caller holds opMu. Ownership is transferred to the recovery goroutine.
@@ -120,7 +159,10 @@ func (m *Manager) launchReconnect(t *Tunnel, oldHost, oldIP, reason string) {
 		defer t.opMu.Unlock()
 		chosen := t.Node
 		t.restoreFirst = &chosen
-		defer func() { t.restoreFirst = nil; t.handoffVerified = false }()
+		// A dead process may resume only its exact previously verified host/IP.
+		// Changed IPs and preflighted handoffs still pass both admission checks.
+		t.resumeSavedExit = reason == healthRecoveryReason && chosen.HostName == oldHost && oldIP != "" && t.savedExitIP() == oldIP
+		defer func() { t.restoreFirst = nil; t.handoffVerified = false; t.resumeSavedExit = false }()
 		// 通知延后到 rebind/resync 之后：那两步会把入站改绑到新节点，
 		// 提前重建配置会因为入站还指着旧节点名而丢掉路由规则
 		m.bringUpPersist(t, false, true)

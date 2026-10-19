@@ -24,6 +24,31 @@ func (s *proxycheckStore) admissionEnabled() bool {
 	return s.data.AdmissionEnabled
 }
 
+// Avoid opening candidate VPNs when no fresh score can be obtained yet.
+func (s *proxycheckStore) admissionQueryWait() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	if s.loadErr != nil || !s.data.Enabled || s.key == "" {
+		return now.Add(time.Minute)
+	}
+	s.pruneRequestsLocked(now)
+	until := s.data.LastRequest.Add(10 * time.Second)
+	if s.data.BlockedUntil.After(until) {
+		until = s.data.BlockedUntil
+	}
+	if len(s.data.Requests) >= proxycheckCandidateLimit && len(s.data.Requests) > 0 {
+		reset := s.data.Requests[0].Add(24 * time.Hour)
+		if reset.After(until) {
+			until = reset
+		}
+	}
+	if until.After(now) {
+		return until
+	}
+	return time.Time{}
+}
+
 // 0: fresh zero; 1: unknown/stale; 2: fresh low fallback; 3: fresh rejected.
 func proxycheckRank(r ProxycheckResult, ip string, now time.Time) int {
 	if r.IP != ip || r.Status != "ok" || r.Score == nil || *r.Score < 0 || *r.Score > 100 || !now.Before(r.ExpiresAt) {

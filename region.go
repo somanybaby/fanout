@@ -79,11 +79,11 @@ func (m *Manager) checkRegionPreference(t *Tunnel, identity ExitIdentity) error 
 	return nil
 }
 func validRotation(minutes int) bool {
-	return minutes == 0 || minutes == 30 || minutes == 60 || minutes == 120 || minutes == 360
+	return minutes == 0 || minutes == 60 || minutes == 360 || minutes == 720 || minutes == 1440 || minutes == 2880
 }
 func (m *Manager) SetRotation(slot, minutes int) error {
 	if !validRotation(minutes) {
-		return fmt.Errorf("轮换间隔请选择关闭、30、60、120 或 360 分钟")
+		return fmt.Errorf("轮换间隔请选择关闭、1、6、12、24 或 48 小时")
 	}
 	m.mu.RLock()
 	t := m.tunnels[slot]

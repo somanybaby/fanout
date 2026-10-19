@@ -260,6 +260,6 @@ func apiRiskSettings(m *Manager) http.HandlerFunc {
 			writeJSON(w, 405, map[string]string{"error": "使用 GET 或 POST"})
 			return
 		}
-		writeJSON(w, 200, map[string]any{"enabled": riskFilterEnabled(), "score_below": riskScoreLimit, "cache_minutes": 30, "requests_per_hour": 12, "notice": "仅筛选新连接；现有出口不立即切换。查询失败不放行。不保证服务解锁。"})
+		writeJSON(w, 200, map[string]any{"enabled": riskFilterEnabled(), "score_below": riskScoreLimit, "check_minutes": 60, "rotate_above": 20, "cache_minutes": 30, "requests_per_hour": 12, "notice": "新出口必须低于 10；当前出口每小时复查，高于 20 提前轮换。查询失败保留当前出口并重试。不保证服务解锁。"})
 	}
 }

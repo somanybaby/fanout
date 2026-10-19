@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"time"
 )
@@ -23,6 +24,7 @@ func (m *Manager) WatchHealth() {
 			}
 			if m.tunnelHealthy(t) {
 				fails[t.Slot] = 0
+				m.maybeCheckRisk(t)
 				m.maybeRotate(t)
 				continue
 			}
@@ -149,16 +151,17 @@ func (m *Manager) launchReconnect(t *Tunnel, oldHost, oldIP, reason string) {
 
 func (m *Manager) maybeRotate(t *Tunnel) {
 	p := t.selectionPolicy()
-	if p.Mode == "strict" || p.ProbeOnly || p.RotateMinutes <= 0 || time.Since(t.Since) < time.Duration(p.RotateMinutes)*time.Minute {
-		return
-	}
-	if time.Since(t.lastRotationAttempt) < time.Minute {
+	if p.Mode == "strict" || p.ProbeOnly {
 		return
 	}
 	if !t.opMu.TryLock() {
 		return
 	}
-	if t.Status != "up" {
+	t.mu.Lock()
+	highRisk := riskFilterEnabled() && (t.riskMustRotate.Load() || runningRiskHigh(t.Risk))
+	t.mu.Unlock()
+	scheduled := p.RotateMinutes > 0 && time.Since(t.Since) >= time.Duration(p.RotateMinutes)*time.Minute
+	if t.Status != "up" || (!highRisk && !scheduled) || time.Since(t.lastRotationAttempt) < time.Minute {
 		t.opMu.Unlock()
 		return
 	}
@@ -169,5 +172,60 @@ func (m *Manager) maybeRotate(t *Tunnel) {
 		t.opMu.Unlock()
 		return
 	}
-	m.prepareSwitch(t, node, p, "定时轮换：同地区优先、同国备用")
+	reason := "定时轮换：同地区优先、同国备用"
+	if highRisk {
+		reason = "当前 IP 风险分高于 20，提前轮换：同地区优先、同国备用"
+	}
+	m.prepareSwitch(t, node, p, reason)
+}
+
+func runningRiskHigh(r RiskAssessment) bool { return r.Score != nil && *r.Score > 20 }
+
+// Current exits use an hourly review and a separate >20 replacement threshold.
+// Candidate admission remains strictly <10. A failed lookup preserves the exit.
+func (m *Manager) maybeCheckRisk(t *Tunnel) {
+	if !riskFilterEnabled() || t.selectionPolicy().ProbeOnly || !t.opMu.TryLock() {
+		return
+	}
+	t.mu.Lock()
+	due := t.nextRiskCheck
+	if due.IsZero() {
+		due = t.Risk.CheckedAt.Add(time.Hour)
+	}
+	if t.Status != "up" || time.Now().Before(due) {
+		t.mu.Unlock()
+		t.opMu.Unlock()
+		return
+	}
+	t.nextRiskCheck = time.Now().Add(10 * time.Minute)
+	t.mu.Unlock()
+	go func() {
+		defer t.opMu.Unlock()
+		m.checkRunningRisk(t)
+	}()
+}
+
+// Caller holds opMu, keeping the checked IP stable during the lookup.
+func (m *Manager) checkRunningRisk(t *Tunnel) {
+	r, err := m.risk.assess(t, t.ExitIP)
+	p := t.selectionPolicy()
+	if err != nil || r.Country != p.Country {
+		m.selection.addEvent(SelectionEvent{Slot: t.Slot, Kind: "risk_check_failed", Reason: "当前 IP 风险查询失败或国家不一致，保留出口并稍后重试", Country: p.Country, OldIP: t.ExitIP})
+		return
+	}
+	t.mu.Lock()
+	t.Risk = r
+	t.nextRiskCheck = r.CheckedAt.Add(time.Hour)
+	t.mu.Unlock()
+	high := runningRiskHigh(r)
+	t.riskMustRotate.Store(high)
+	reason := fmt.Sprintf("每小时风险复查：%.2f；未高于 20，继续使用", *r.Score)
+	if high {
+		reason = fmt.Sprintf("每小时风险复查：%.2f，高于 20，等待同地区/同国且低于 10 的接替 IP", *r.Score)
+		if p.Mode == "strict" {
+			t.egressReady.Store(false)
+			reason += "；严格锁定仅暂停并重试原 IP"
+		}
+	}
+	m.selection.addEvent(SelectionEvent{Slot: t.Slot, Kind: "risk_checked", Reason: reason, Country: p.Country, OldIP: t.ExitIP})
 }

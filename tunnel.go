@@ -28,6 +28,8 @@ type Tunnel struct {
 	stopOnce            sync.Once
 	stopCh              chan struct{}
 	Risk                RiskAssessment `json:"risk"`
+	riskMustRotate      atomic.Bool
+	nextRiskCheck       time.Time // guarded by mu
 	allowRegionFallback bool
 	retryAfter          time.Time
 	skipHostOnce        string

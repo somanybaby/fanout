@@ -24,6 +24,55 @@ func TestRiskScoreBoundaryAndMissingValues(t *testing.T) {
 		}
 	}
 }
+
+func TestRiskRunningThresholdAndHourlyReview(t *testing.T) {
+	webSettingsMu.Lock()
+	old := webSettingsCur.RiskFilterEnabled
+	webSettingsCur.RiskFilterEnabled = true
+	webSettingsMu.Unlock()
+	t.Cleanup(func() {
+		webSettingsMu.Lock()
+		webSettingsCur.RiskFilterEnabled = old
+		webSettingsMu.Unlock()
+	})
+	for _, score := range []float64{4, 10, 19, 20, 20.01, 99} {
+		t.Run(fmt.Sprint(score), func(t *testing.T) {
+			m, tn := selectionFixture(t)
+			tn.egressReady.Store(true)
+			calls := 0
+			m.risk.fetch = func(*Tunnel) ([]byte, error) {
+				calls++
+				return []byte(fmt.Sprintf(`{"ip":"1.1.1.1","fraudScore":%v,"countryCode":"JP"}`, score)), nil
+			}
+			tn.opMu.Lock()
+			m.checkRunningRisk(tn)
+			tn.opMu.Unlock()
+			if tn.riskMustRotate.Load() != (score > 20) || !tn.egressReady.Load() || tn.Status != "up" {
+				t.Fatal("running threshold blocked or misclassified an existing working exit")
+			}
+			m.maybeCheckRisk(tn)
+			if calls != 1 || time.Until(tn.nextRiskCheck) < 59*time.Minute {
+				t.Fatal("hourly schedule repeated a fresh lookup")
+			}
+			if score >= 10 && m.verifyRisk(tn, tn, "1.1.1.1", "JP") == nil {
+				t.Fatal("running tolerance leaked into new-candidate admission")
+			}
+		})
+	}
+	if runningRiskHigh(RiskAssessment{}) || !validRotation(1440) || !validRotation(2880) {
+		t.Fatal("unknown score or daily rotation policy incorrect")
+	}
+	m, tn := selectionFixture(t)
+	tn.egressReady.Store(true)
+	tn.Risk = RiskAssessment{Score: func() *float64 { v := 4.0; return &v }(), CheckedAt: time.Now().Add(-time.Hour)}
+	m.risk.fetch = func(*Tunnel) ([]byte, error) { return nil, fmt.Errorf("provider unavailable") }
+	tn.opMu.Lock()
+	m.checkRunningRisk(tn)
+	tn.opMu.Unlock()
+	if !tn.egressReady.Load() || tn.riskMustRotate.Load() || *tn.Risk.Score != 4 {
+		t.Fatal("lookup failure changed the working exit or fabricated a score")
+	}
+}
 func TestRiskCacheAndGlobalRateLimit(t *testing.T) {
 	s := newRiskStore(t.TempDir())
 	calls := 0

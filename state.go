@@ -153,6 +153,9 @@ func (m *Manager) restoreState() (int, error) {
 func (m *Manager) restoreTunnel(t *Tunnel) {
 	t.opMu.Lock()
 	defer t.opMu.Unlock()
+	saved := t.Node
+	t.restoreFirst = &saved
+	defer func() { t.restoreFirst = nil }()
 	prev := t.prevHostOf()
 	if prev == "" {
 		prev = t.Node.HostName

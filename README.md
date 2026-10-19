@@ -1,6 +1,6 @@
 # Fanout 自有维护版本
 
-基于 [byJoey/fanout v1.3.1](https://github.com/byJoey/fanout/tree/v1.3.1) 二次修改，保留原许可证和提交历史。自有更新渠道：[somanybaby/fanout Releases](https://github.com/somanybaby/fanout/releases)。当前维护版本：v1.5.2。
+基于 [byJoey/fanout v1.3.1](https://github.com/byJoey/fanout/tree/v1.3.1) 二次修改，保留原许可证和提交历史。自有更新渠道：[somanybaby/fanout Releases](https://github.com/somanybaby/fanout/releases)。当前维护版本：v1.5.3。
 
 - **自主选 IP**：顶部“IP 列表”或出口旁“选 IP”，先按国家/地区、历史质量筛选，再试连、收藏、排除或选用。公布 IP 是 VPN 连接地址，实际出口必须连接后核验。
 - **三种模式**：自动、首选 IP、严格锁定。严格锁定只允许选定的实际 IP，失效时阻断并重试，禁止定时轮换。原节点链接、端口和凭据保持。

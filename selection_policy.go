@@ -126,6 +126,9 @@ func (m *Manager) policyCandidates(t *Tunnel) []Node {
 		add(first)
 		return candidates
 	}
+	if t.restoreFirst != nil && p.Mode != "strict" {
+		add(*t.restoreFirst)
+	}
 	if p.Mode == "strict" || p.Mode == "preferred" {
 		preferred := p.Preferred
 		for _, n := range m.nodes {

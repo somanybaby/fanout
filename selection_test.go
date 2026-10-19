@@ -269,3 +269,16 @@ func TestSelectionCurrentNodeOutsidePublishedSampleIsRetained(t *testing.T) {
 		t.Fatal("current node disappeared with the public sample")
 	}
 }
+
+func TestSelectionRestartPrefersExactSavedCurrentConfig(t *testing.T) {
+	m, tn := selectionFixture(t)
+	saved := tn.Node
+	tn.restoreFirst = &saved
+	m.nodes[0].Config = "remote 9.9.9.9 443"
+	m.quality.record("tokyo", true, 1)
+	m.quality.identify("tokyo", ExitIdentity{Region: "Tokyo", RegionCode: "13"})
+	got := m.candidatesFor(tn)
+	if len(got) == 0 || got[0].HostName != saved.HostName || got[0].Config != saved.Config {
+		t.Fatal("restart ranked an alternative or changed the saved config before restoring the current exit")
+	}
+}

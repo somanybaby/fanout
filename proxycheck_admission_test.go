@@ -76,6 +76,36 @@ func TestProxycheckAdmissionDefersLowWithoutSpendingIPPure(t *testing.T) {
 	}
 }
 
+func TestProxycheckAdmissionStillRequiresIPPureBelowTen(t *testing.T) {
+	m, tn := admissionFixture(t)
+	m.proxycheck.fetch = func(context.Context, string, string) ([]byte, error) {
+		return proxycheckFixtureJSON(tn.ExitIP, "0"), nil
+	}
+	m.risk.fetch = func(*Tunnel) ([]byte, error) {
+		return []byte(`{"ip":"1.1.1.1","fraudScore":10,"countryCode":"JP"}`), nil
+	}
+	if m.verifyCandidateRisks(tn, tn, tn.ExitIP, "JP") == nil {
+		t.Fatal("ProxyCheck zero bypassed IPPure <10")
+	}
+}
+
+func TestProxycheckAdmissionVerifiedHandoffRechecksLowScore(t *testing.T) {
+	m, tn := admissionFixture(t)
+	saved := tn.Node
+	tn.restoreFirst = &saved
+	tn.handoffVerified = true
+	m.proxycheck.fetch = func(context.Context, string, string) ([]byte, error) {
+		return proxycheckFixtureJSON(tn.ExitIP, "10"), nil
+	}
+	if m.verifyProxycheckAdmission(tn, tn.ExitIP) != nil {
+		t.Fatal("already-preflighted low fallback was deferred again during handoff")
+	}
+	tn.Node = m.nodes[2]
+	if m.verifyProxycheckAdmission(tn, tn.ExitIP) == nil {
+		t.Fatal("handoff permission leaked to a different VPN host")
+	}
+}
+
 func TestProxycheckAdmissionResumesOnlyExactSavedIP(t *testing.T) {
 	m, tn := admissionFixture(t)
 	saved := tn.Node

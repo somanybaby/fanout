@@ -76,16 +76,20 @@ func TestProxycheckAdmissionDefersLowWithoutSpendingIPPure(t *testing.T) {
 	}
 }
 
-func TestProxycheckAdmissionStillRequiresIPPureBelowTen(t *testing.T) {
-	m, tn := admissionFixture(t)
-	m.proxycheck.fetch = func(context.Context, string, string) ([]byte, error) {
-		return proxycheckFixtureJSON(tn.ExitIP, "0"), nil
-	}
-	m.risk.fetch = func(*Tunnel) ([]byte, error) {
-		return []byte(`{"ip":"1.1.1.1","fraudScore":10,"countryCode":"JP"}`), nil
-	}
-	if m.verifyCandidateRisks(tn, tn, tn.ExitIP, "JP") == nil {
-		t.Fatal("ProxyCheck zero bypassed IPPure <10")
+func TestProxycheckAdmissionStillRequiresIPPureAtMostTwenty(t *testing.T) {
+	for _, score := range []float64{10, 20, 20.01} {
+		t.Run(fmt.Sprint(score), func(t *testing.T) {
+			m, tn := admissionFixture(t)
+			m.proxycheck.fetch = func(context.Context, string, string) ([]byte, error) {
+				return proxycheckFixtureJSON(tn.ExitIP, "0"), nil
+			}
+			m.risk.fetch = func(*Tunnel) ([]byte, error) {
+				return []byte(fmt.Sprintf(`{"ip":"1.1.1.1","fraudScore":%v,"countryCode":"JP"}`, score)), nil
+			}
+			if accepted := m.verifyCandidateRisks(tn, tn, tn.ExitIP, "JP") == nil; accepted != (score <= 20) {
+				t.Fatal("ProxyCheck zero must still respect the inclusive IPPure limit of 20")
+			}
+		})
 	}
 }
 

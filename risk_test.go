@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -12,7 +14,7 @@ func TestRiskScoreBoundaryAndMissingValues(t *testing.T) {
 		score  string
 		status string
 		valid  bool
-	}{{"0", "pass", true}, {"9.99", "pass", true}, {"10", "reject", true}, {"99", "reject", true}, {"null", "unknown", false}, {"-1", "unknown", false}, {"101", "unknown", false}} {
+	}{{"0", "pass", true}, {"9.99", "pass", true}, {"10", "pass", true}, {"19.99", "pass", true}, {"20", "pass", true}, {"20.01", "reject", true}, {"99", "reject", true}, {"null", "unknown", false}, {"-1", "unknown", false}, {"101", "unknown", false}} {
 		r, err := parseRisk([]byte(fmt.Sprintf(`{"ip":"1.2.3.4","fraudScore":%s,"countryCode":"JP"}`, tc.score)), "1.2.3.4", time.Now())
 		if (err == nil) != tc.valid || r.Status != tc.status {
 			t.Fatalf("score %s: %+v %v", tc.score, r, err)
@@ -54,8 +56,8 @@ func TestRiskRunningThresholdAndHourlyReview(t *testing.T) {
 			if calls != 1 || time.Until(tn.nextRiskCheck) < 59*time.Minute {
 				t.Fatal("hourly schedule repeated a fresh lookup")
 			}
-			if score >= 10 && m.verifyRisk(tn, tn, "1.1.1.1", "JP") == nil {
-				t.Fatal("running tolerance leaked into new-candidate admission")
+			if accepted := m.verifyRisk(tn, tn, "1.1.1.1", "JP") == nil; accepted != (score <= 20) {
+				t.Fatal("new-candidate admission must include 20 and reject higher scores")
 			}
 		})
 	}
@@ -71,6 +73,42 @@ func TestRiskRunningThresholdAndHourlyReview(t *testing.T) {
 	tn.opMu.Unlock()
 	if !tn.egressReady.Load() || tn.riskMustRotate.Load() || *tn.Risk.Score != 4 {
 		t.Fatal("lookup failure changed the working exit or fabricated a score")
+	}
+}
+
+func TestRiskCacheReclassifiesOldThresholdWithoutRefetch(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().UTC()
+	entries := map[string]RiskAssessment{}
+	for i, score := range []float64{10, 20, 20.01} {
+		ip := fmt.Sprintf("1.2.3.%d", i+1)
+		entries[ip] = RiskAssessment{IP: ip, Score: &score, Country: "JP", Status: "reject", CheckedAt: now, ExpiresAt: now.Add(riskCacheTTL)}
+	}
+	unknown := 10.0
+	entries["1.2.3.4"] = RiskAssessment{IP: "1.2.3.4", Score: &unknown, Country: "JP", Status: "unknown", CheckedAt: now, ExpiresAt: now.Add(riskCacheTTL)}
+	b, err := json.Marshal(riskData{Entries: entries})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "risk-cache.json"), b, 0600); err != nil {
+		t.Fatal(err)
+	}
+	s := newRiskStore(dir)
+	s.fetch = func(*Tunnel) ([]byte, error) {
+		t.Fatal("fresh cache triggered a new provider request")
+		return nil, nil
+	}
+	for ip, old := range entries {
+		r, err := s.assess(&Tunnel{}, ip)
+		if old.Status == "unknown" {
+			if err == nil || r.Status != "unknown" {
+				t.Fatal("unknown cache was promoted to a valid score")
+			}
+			continue
+		}
+		if err != nil || (r.Status == "pass") != (*old.Score <= 20) || !r.CheckedAt.Equal(now) || !r.ExpiresAt.Equal(old.ExpiresAt) {
+			t.Fatalf("cached score was not reclassified without changing its age: %+v %v", r, err)
+		}
 	}
 }
 func TestRiskCacheAndGlobalRateLimit(t *testing.T) {

@@ -10,5 +10,7 @@ build/
 state.json
 settings.json
 validation-private.json
+proxycheck-key
+proxycheck.json
 .playwright-cli/
 output/playwright/

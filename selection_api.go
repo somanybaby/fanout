@@ -10,6 +10,7 @@ import (
 )
 
 type CandidateView struct {
+	Proxycheck      ProxycheckResult   `json:"proxycheck"`
 	Verification    VerificationResult `json:"verification"`
 	Host            string             `json:"host"`
 	IP              string             `json:"ip"`
@@ -54,6 +55,7 @@ func (m *Manager) candidateViews() []CandidateView {
 		observed := m.selection.mark(q.Identity.IP)
 		row := CandidateView{Host: n.HostName, IP: n.IP, Country: n.CountryCode, CountryName: countryLabel(n.CountryCode, n.Country), AdvertisedSpeed: n.SpeedMbps, Identity: q.Identity, Risk: m.risk.snapshot(q.Identity.IP), Quality: q, Favorite: mark.Favorite || observed.Favorite, Blocked: mark.Blocked || observed.Blocked}
 		row.Verification = verification.Results[n.HostName]
+		row.Proxycheck = m.proxycheck.snapshot(q.Identity.IP)
 		if verification.Current == n.HostName {
 			row.Verification.Status = "checking"
 		}

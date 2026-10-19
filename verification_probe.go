@@ -71,6 +71,10 @@ func (m *Manager) probeVerification(ctx context.Context, n Node) VerificationRes
 		}
 	}()
 	ip, latency, err := m.checkVerificationTunnel(ctx, t)
+	if ctx.Err() == context.DeadlineExceeded {
+		m.quality.record(n.HostName, false, 0)
+		return VerificationResult{Status: "failed", Detail: "单个节点核验超时，继续下一个候选", IP: ip}
+	}
 	if ctx.Err() != nil {
 		return VerificationResult{Status: "waiting", Detail: "核验已取消或超时，等待重试"}
 	}

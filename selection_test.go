@@ -226,3 +226,29 @@ func TestSelectionPreflightNoSpareSlotKeepsWorkingExit(t *testing.T) {
 		t.Fatal("failed preflight interrupted working exit")
 	}
 }
+
+func TestSelectionHealthyTimerRunsPreflightWithoutDroppingExit(t *testing.T) {
+	m, tn := selectionFixture(t)
+	m.maxSlots = 1
+	tn.Policy.RotateMinutes = 60
+	tn.Since = time.Now().Add(-2 * time.Hour)
+	tn.egressReady.Store(true)
+	m.maybeRotate(tn)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if tn.opMu.TryLock() {
+			tn.opMu.Unlock()
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if tn.lastRotationAttempt.IsZero() || tn.Status != "up" || tn.ExitIP != "1.1.1.1" || !tn.egressReady.Load() {
+		t.Fatal("healthy timer did not safely preflight")
+	}
+	tn.Policy.Mode = "strict"
+	before := tn.lastRotationAttempt
+	m.maybeRotate(tn)
+	if tn.lastRotationAttempt != before {
+		t.Fatal("strict timer ran")
+	}
+}

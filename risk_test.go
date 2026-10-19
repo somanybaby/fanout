@@ -57,3 +57,18 @@ func TestRiskFailureNeverBecomesZeroScore(t *testing.T) {
 		t.Fatal("missing assessment")
 	}
 }
+
+func TestRiskRespectsProviderRetryAfter(t *testing.T) {
+	now := time.Now()
+	if riskRetryAfter("600", now).Sub(now) != 10*time.Minute {
+		t.Fatal("Retry-After seconds ignored")
+	}
+	s := newRiskStore(t.TempDir())
+	calls := 0
+	s.fetch = func(*Tunnel) ([]byte, error) { calls++; return nil, &riskWaitError{Until: now.Add(20 * time.Minute)} }
+	_, _ = s.assess(&Tunnel{}, "1.2.3.4")
+	s.data.LastRequest = now.Add(-2 * time.Minute)
+	if _, err := s.assess(&Tunnel{}, "5.6.7.8"); err == nil || calls != 1 {
+		t.Fatal("provider cooldown bypassed")
+	}
+}

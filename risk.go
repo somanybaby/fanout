@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const riskScoreLimit = 10
+const riskScoreLimit = 20
 const riskCacheTTL = 30 * time.Minute
 
 type RiskAssessment struct {
@@ -59,6 +59,17 @@ func newRiskStore(dir string) *riskStore {
 	if s.data.Entries == nil {
 		s.data.Entries = map[string]RiskAssessment{}
 	}
+	// Reclassify valid cached scores when the admission threshold changes.
+	// Keep the original timestamps and never turn an unknown result into a pass.
+	for ip, r := range s.data.Entries {
+		if r.Status == "pass" || r.Status == "reject" {
+			r.Status = "reject"
+			if r.IP == ip && len(r.Country) == 2 && riskScoreAccepted(r.Score) {
+				r.Status = "pass"
+			}
+			s.data.Entries[ip] = r
+		}
+	}
 	s.fetch = func(t *Tunnel) ([]byte, error) {
 		client := proxyHTTPClient(t.Port, t.credential(), healthTimeout)
 		resp, err := client.Get("https://my.ippure.com/v1/info")
@@ -96,10 +107,14 @@ func parseRisk(blob []byte, expected string, now time.Time) (RiskAssessment, err
 	r.City = raw.City
 	r.ExpiresAt = now.Add(riskCacheTTL)
 	r.Status = "reject"
-	if *raw.Score < riskScoreLimit {
+	if riskScoreAccepted(raw.Score) {
 		r.Status = "pass"
 	}
 	return r, nil
+}
+
+func riskScoreAccepted(score *float64) bool {
+	return score != nil && !math.IsNaN(*score) && *score >= 0 && *score <= riskScoreLimit
 }
 func (s *riskStore) snapshot(ip string) RiskAssessment {
 	if s == nil {
@@ -224,8 +239,8 @@ func (m *Manager) verifyRisk(t, probe *Tunnel, ip, country string) error {
 	if err != nil {
 		return err
 	}
-	if r.Status != "pass" || r.Score == nil || *r.Score >= riskScoreLimit {
-		return fmt.Errorf("IPPure 风险分不低于 10，拒绝接入")
+	if r.Status != "pass" || !riskScoreAccepted(r.Score) {
+		return fmt.Errorf("IPPure 风险分高于 20 或无有效评分，拒绝接入")
 	}
 	if r.Country != country {
 		return fmt.Errorf("IPPure 与出口国家核验结果不一致，拒绝接入")
@@ -260,6 +275,6 @@ func apiRiskSettings(m *Manager) http.HandlerFunc {
 			writeJSON(w, 405, map[string]string{"error": "使用 GET 或 POST"})
 			return
 		}
-		writeJSON(w, 200, map[string]any{"enabled": riskFilterEnabled(), "score_below": riskScoreLimit, "check_minutes": 60, "rotate_above": 20, "cache_minutes": 30, "requests_per_hour": 12, "notice": "新出口必须低于 10；当前出口每小时复查，高于 20 提前轮换。查询失败保留当前出口并重试。不保证服务解锁。"})
+		writeJSON(w, 200, map[string]any{"enabled": riskFilterEnabled(), "score_max": riskScoreLimit, "score_inclusive": true, "check_minutes": 60, "rotate_above": 20, "cache_minutes": 30, "requests_per_hour": 12, "notice": "新出口风险分须不高于 20（含 20）；当前出口每小时复查，高于 20 提前轮换。查询失败保留当前出口并重试。不保证服务解锁。"})
 	}
 }

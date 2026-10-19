@@ -185,7 +185,7 @@ func (m *Manager) maybeRotate(t *Tunnel) {
 func runningRiskHigh(r RiskAssessment) bool { return r.Score != nil && *r.Score > 20 }
 
 // Current exits use an hourly review and a separate >20 replacement threshold.
-// Candidate admission remains strictly <10. A failed lookup preserves the exit.
+// Candidate admission accepts scores <=20. A failed lookup preserves the exit.
 func (m *Manager) maybeCheckRisk(t *Tunnel) {
 	if !riskFilterEnabled() || t.selectionPolicy().ProbeOnly || !t.opMu.TryLock() {
 		return
@@ -224,7 +224,7 @@ func (m *Manager) checkRunningRisk(t *Tunnel) {
 	t.riskMustRotate.Store(high)
 	reason := fmt.Sprintf("每小时风险复查：%.2f；未高于 20，继续使用", *r.Score)
 	if high {
-		reason = fmt.Sprintf("每小时风险复查：%.2f，高于 20，等待同地区/同国且低于 10 的接替 IP", *r.Score)
+		reason = fmt.Sprintf("每小时风险复查：%.2f，高于 20，等待同地区/同国且不高于 20 的接替 IP", *r.Score)
 		if p.Mode == "strict" {
 			t.egressReady.Store(false)
 			reason += "；严格锁定仅暂停并重试原 IP"

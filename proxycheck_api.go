@@ -9,8 +9,9 @@ func apiProxycheck(m *Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			var in struct {
-				Enabled *bool   `json:"enabled"`
-				APIKey  *string `json:"api_key"`
+				Enabled   *bool   `json:"enabled"`
+				APIKey    *string `json:"api_key"`
+				Admission *bool   `json:"admission_enabled"`
 			}
 			decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2048))
 			decoder.DisallowUnknownFields()
@@ -18,7 +19,7 @@ func apiProxycheck(m *Manager) http.HandlerFunc {
 				writeJSON(w, 400, map[string]string{"error": "请求格式错误"})
 				return
 			}
-			if err := m.proxycheck.configure(in.Enabled, in.APIKey); err != nil {
+			if err := m.proxycheck.configure(in.Enabled, in.APIKey, in.Admission); err != nil {
 				writeJSON(w, 409, map[string]string{"error": err.Error()})
 				return
 			}

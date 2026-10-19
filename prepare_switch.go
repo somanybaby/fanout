@@ -20,59 +20,87 @@ func (m *Manager) prepareSwitch(t *Tunnel, chosen Node, policy SelectionPolicy, 
 		}()
 		shadow := &Tunnel{Slot: t.Slot, Node: chosen, Policy: policy, skipHostOnce: oldHost}
 		candidates := m.policyCandidates(shadow)
-		var fallback *Node
-		for _, n := range candidates {
-			if !m.tunnelActive(t) {
-				return
+		zeroFirst := m.proxycheck.admissionEnabled() && policy.Mode == "auto"
+		lowCandidates := []Node{}
+		rounds := 1
+		if zeroFirst {
+			rounds = 2
+		}
+		for scorePhase := 0; scorePhase < rounds; scorePhase++ {
+			if scorePhase == 1 {
+				candidates = lowCandidates
 			}
-			if until := m.risk.queryWait(n.IP, m.quality.snapshot(n.HostName).Identity.IP); !until.IsZero() {
-				m.selection.addEvent(SelectionEvent{Slot: t.Slot, Kind: "prepare_wait", Reason: "IPPure 查询冷却中，保留当前出口，稍后重试", Country: policy.Country, OldIP: oldIP})
-				break
+			var fallback *Node
+			for _, n := range candidates {
+				if !m.tunnelActive(t) {
+					return
+				}
+				pcRank := m.nodeProxycheckRank(n)
+				if zeroFirst && scorePhase == 0 && pcRank == 2 {
+					lowCandidates = append(lowCandidates, n)
+					continue
+				}
+				if m.proxycheck.admissionEnabled() && pcRank == 3 {
+					continue
+				}
+				if !m.proxycheck.admissionEnabled() || pcRank == 0 || (pcRank == 2 && scorePhase == 1) {
+					if until := m.risk.queryWait(n.IP, m.quality.snapshot(n.HostName).Identity.IP); !until.IsZero() {
+						m.selection.addEvent(SelectionEvent{Slot: t.Slot, Kind: "prepare_wait", Reason: "IPPure 查询冷却中，保留当前出口，稍后重试", Country: policy.Country, OldIP: oldIP})
+						return
+					}
+				}
+				p := policy
+				p.ProbeOnly = true
+				p.RequirePCZero = zeroFirst && scorePhase == 0
+				p.AllowPCLow = zeroFirst && scorePhase == 1
+				p.RotateMinutes = 0
+				probe, err := m.StartSelected(n, p)
+				if err != nil {
+					m.selection.addEvent(SelectionEvent{Slot: t.Slot, Kind: "prepare_wait", Reason: "候选不可用或没有空闲位置，保留当前出口", Country: policy.Country, OldIP: oldIP})
+					break
+				}
+				deadline := time.Now().Add(55 * time.Second)
+				for time.Now().Before(deadline) && probe.Status == "starting" && m.tunnelActive(t) {
+					time.Sleep(time.Second)
+				}
+				up := probe.Status == "up"
+				node, identity := probe.Node, probe.Identity
+				if zeroFirst && scorePhase == 0 && !up && m.nodeProxycheckRank(node) == 2 {
+					lowCandidates = append(lowCandidates, node)
+				}
+				same := policy.Region == "" && policy.RegionCode == "" || sameRegion(policy.Country, policy.RegionCode, policy.Region, identity.RegionCode, identity.Region)
+				m.mu.RLock()
+				owned := m.tunnels[probe.Slot] == probe
+				m.mu.RUnlock()
+				if owned {
+					_ = m.Stop(probe.Slot)
+				}
+				if !m.tunnelActive(t) {
+					return
+				}
+				if up && (same || policy.Mode == "strict") {
+					t.setPolicy(policy)
+					t.Node = node
+					t.skipHostOnce = oldHost
+					transferred = true
+					t.handoffVerified = true
+					m.launchReconnect(t, oldHost, oldIP, reason)
+					return
+				}
+				if up && fallback == nil {
+					copy := node
+					fallback = &copy
+				}
 			}
-			p := policy
-			p.ProbeOnly = true
-			p.RotateMinutes = 0
-			probe, err := m.StartSelected(n, p)
-			if err != nil {
-				m.selection.addEvent(SelectionEvent{Slot: t.Slot, Kind: "prepare_wait", Reason: "候选不可用或没有空闲位置，保留当前出口", Country: policy.Country, OldIP: oldIP})
-				break
-			}
-			deadline := time.Now().Add(55 * time.Second)
-			for time.Now().Before(deadline) && probe.Status == "starting" && m.tunnelActive(t) {
-				time.Sleep(time.Second)
-			}
-			up := probe.Status == "up"
-			node, identity := probe.Node, probe.Identity
-			same := policy.Region == "" && policy.RegionCode == "" || sameRegion(policy.Country, policy.RegionCode, policy.Region, identity.RegionCode, identity.Region)
-			m.mu.RLock()
-			owned := m.tunnels[probe.Slot] == probe
-			m.mu.RUnlock()
-			if owned {
-				_ = m.Stop(probe.Slot)
-			}
-			if !m.tunnelActive(t) {
-				return
-			}
-			if up && (same || policy.Mode == "strict") {
+			if fallback != nil && m.tunnelActive(t) {
 				t.setPolicy(policy)
-				t.Node = node
+				t.Node = *fallback
 				t.skipHostOnce = oldHost
 				transferred = true
-				m.launchReconnect(t, oldHost, oldIP, reason)
+				t.handoffVerified = true
+				m.launchReconnect(t, oldHost, oldIP, reason+"：本轮无同地区合格节点，使用同国备用")
 				return
 			}
-			if up && fallback == nil {
-				copy := node
-				fallback = &copy
-			}
-		}
-		if fallback != nil && m.tunnelActive(t) {
-			t.setPolicy(policy)
-			t.Node = *fallback
-			t.skipHostOnce = oldHost
-			transferred = true
-			m.launchReconnect(t, oldHost, oldIP, reason+"：本轮无同地区合格节点，使用同国备用")
-			return
 		}
 		m.selection.addEvent(SelectionEvent{Slot: t.Slot, Kind: "prepare_failed", Reason: "本轮没有核验通过的候选，保留当前出口", Country: policy.Country, OldIP: oldIP})
 	}()

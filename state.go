@@ -11,6 +11,7 @@ import (
 // persistedTunnel 是隧道在磁盘上的形态。
 // 只存重建所需的信息，运行态（netns、进程、监听）重启后重新建立。
 type persistedTunnel struct {
+	LastExitIP      string          `json:"last_exit_ip,omitempty"`
 	Policy          SelectionPolicy `json:"selection"`
 	PreferredNode   *Node           `json:"preferred_node,omitempty"`
 	PreferredConfig string          `json:"preferred_config,omitempty"`
@@ -52,7 +53,8 @@ func (m *Manager) saveState() error {
 			preferred = &n
 		}
 		st.Tunnels = append(st.Tunnels, persistedTunnel{
-			Policy: policy, PreferredNode: preferred, PreferredConfig: policy.Preferred.Config,
+			LastExitIP: t.savedExitIP(),
+			Policy:     policy, PreferredNode: preferred, PreferredConfig: policy.Preferred.Config,
 			Slot:        t.Slot,
 			Port:        t.Port,
 			HostName:    t.Node.HostName,
@@ -132,13 +134,14 @@ func (m *Manager) restoreState() (int, error) {
 			}
 		}
 		t := &Tunnel{
-			stopCh: make(chan struct{}),
-			Policy: policy,
-			Slot:   p.Slot,
-			Port:   p.Port,
-			Node:   node,
-			Status: "starting",
-			Cred:   cred,
+			lastVerifiedIP: p.LastExitIP,
+			stopCh:         make(chan struct{}),
+			Policy:         policy,
+			Slot:           p.Slot,
+			Port:           p.Port,
+			Node:           node,
+			Status:         "starting",
+			Cred:           cred,
 		}
 		t.setPrevHost(p.PrevHost)
 		m.mu.Lock()
@@ -155,7 +158,8 @@ func (m *Manager) restoreTunnel(t *Tunnel) {
 	defer t.opMu.Unlock()
 	saved := t.Node
 	t.restoreFirst = &saved
-	defer func() { t.restoreFirst = nil }()
+	t.resumeSavedExit = true
+	defer func() { t.restoreFirst = nil; t.resumeSavedExit = false }()
 	prev := t.prevHostOf()
 	if prev == "" {
 		prev = t.Node.HostName

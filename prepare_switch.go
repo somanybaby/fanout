@@ -25,6 +25,10 @@ func (m *Manager) prepareSwitch(t *Tunnel, chosen Node, policy SelectionPolicy, 
 			if !m.tunnelActive(t) {
 				return
 			}
+			if until := m.risk.queryWait(n.IP, m.quality.snapshot(n.HostName).Identity.IP); !until.IsZero() {
+				m.selection.addEvent(SelectionEvent{Slot: t.Slot, Kind: "prepare_wait", Reason: "IPPure 查询冷却中，保留当前出口，稍后重试", Country: policy.Country, OldIP: oldIP})
+				break
+			}
 			p := policy
 			p.ProbeOnly = true
 			p.RotateMinutes = 0

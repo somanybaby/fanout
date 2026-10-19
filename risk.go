@@ -190,6 +190,32 @@ func riskRetryAfter(raw string, now time.Time) time.Time {
 	}
 	return now.Add(10 * time.Minute)
 }
+
+// Avoid opening many VPN sessions while the public API is cooling down.
+func (s *riskStore) queryWait(ips ...string) time.Time {
+	if s == nil || !riskFilterEnabled() {
+		return time.Time{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	for _, ip := range ips {
+		if v, ok := s.data.Entries[ip]; ok && now.Before(v.ExpiresAt) && v.Status == "pass" {
+			return time.Time{}
+		}
+	}
+	until := s.data.LastRequest.Add(time.Minute)
+	if now.Sub(s.data.Window) < time.Hour && s.data.Requests >= 12 {
+		until = s.data.Window.Add(time.Hour)
+	}
+	if s.data.BlockedUntil.After(until) {
+		until = s.data.BlockedUntil
+	}
+	if now.Before(until) {
+		return until
+	}
+	return time.Time{}
+}
 func (m *Manager) verifyRisk(t, probe *Tunnel, ip, country string) error {
 	if !riskFilterEnabled() {
 		return nil

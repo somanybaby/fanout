@@ -20,19 +20,20 @@ type ExitInbound struct {
 // Exit 是界面上的一行：一条隧道加上挂在它出口的所有入站。
 // 用户脑子里的单位是"一个出口"，不是"一条隧道"和"一个入站"两样东西。
 type Exit struct {
-	Risk          RiskAssessment  `json:"risk"`
-	Selection     SelectionPolicy `json:"selection"`
-	StableSeconds int64           `json:"stable_seconds"`
-	Quality       NodeQuality     `json:"quality"`
-	Slot          int             `json:"slot"`
-	Port          int             `json:"port"` // SOCKS5 端口
-	Host          string          `json:"host"`
-	Region        string          `json:"region"`
-	Country       string          `json:"country"`
-	ExitIP        string          `json:"exit_ip"`
-	Status        string          `json:"status"`
-	Err           string          `json:"err,omitempty"`
-	Since         time.Time       `json:"since"`
+	Proxycheck    ProxycheckResult `json:"proxycheck"`
+	Risk          RiskAssessment   `json:"risk"`
+	Selection     SelectionPolicy  `json:"selection"`
+	StableSeconds int64            `json:"stable_seconds"`
+	Quality       NodeQuality      `json:"quality"`
+	Slot          int              `json:"slot"`
+	Port          int              `json:"port"` // SOCKS5 端口
+	Host          string           `json:"host"`
+	Region        string           `json:"region"`
+	Country       string           `json:"country"`
+	ExitIP        string           `json:"exit_ip"`
+	Status        string           `json:"status"`
+	Err           string           `json:"err,omitempty"`
+	Since         time.Time        `json:"since"`
 	// SOCKS5 凭据：界面要能看、能复制、能改
 	SocksUser   string            `json:"socks_user"`
 	SocksPass   string            `json:"socks_pass"`
@@ -118,7 +119,8 @@ func (m *Manager) ExitsOf() ExitsView {
 		identity, diagnostics := t.Identity, t.LastDiagnostics
 		t.mu.Unlock()
 		view.Exits = append(view.Exits, Exit{
-			Risk: m.risk.snapshot(t.ExitIP), Selection: t.selectionPolicy(), StableSeconds: int64(time.Since(t.Since).Seconds()), Quality: m.quality.snapshot(t.Node.HostName),
+			Proxycheck: m.proxycheck.snapshot(t.ExitIP),
+			Risk:       m.risk.snapshot(t.ExitIP), Selection: t.selectionPolicy(), StableSeconds: int64(time.Since(t.Since).Seconds()), Quality: m.quality.snapshot(t.Node.HostName),
 			Slot: t.Slot, Port: t.Port, Host: t.Node.HostName,
 			Region: t.Node.CountryCode, Country: nodeLabel(t.Node),
 			ExitIP: t.ExitIP, Status: t.Status, Err: t.Err, Since: t.Since,

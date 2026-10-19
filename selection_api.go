@@ -10,21 +10,23 @@ import (
 )
 
 type CandidateView struct {
-	Host            string         `json:"host"`
-	IP              string         `json:"ip"`
-	Country         string         `json:"country"`
-	CountryName     string         `json:"country_name"`
-	AdvertisedSpeed float64        `json:"advertised_speed_mbps"`
-	Identity        ExitIdentity   `json:"identity"`
-	Risk            RiskAssessment `json:"risk"`
-	Quality         NodeQuality    `json:"quality"`
-	Favorite        bool           `json:"favorite"`
-	Blocked         bool           `json:"blocked"`
-	ActiveSlot      int            `json:"active_slot"`
-	StableSeconds   int64          `json:"stable_seconds"`
+	Verification    VerificationResult `json:"verification"`
+	Host            string             `json:"host"`
+	IP              string             `json:"ip"`
+	Country         string             `json:"country"`
+	CountryName     string             `json:"country_name"`
+	AdvertisedSpeed float64            `json:"advertised_speed_mbps"`
+	Identity        ExitIdentity       `json:"identity"`
+	Risk            RiskAssessment     `json:"risk"`
+	Quality         NodeQuality        `json:"quality"`
+	Favorite        bool               `json:"favorite"`
+	Blocked         bool               `json:"blocked"`
+	ActiveSlot      int                `json:"active_slot"`
+	StableSeconds   int64              `json:"stable_seconds"`
 }
 
 func (m *Manager) candidateViews() []CandidateView {
+	verification := m.verification.snapshot()
 	nodes, _ := m.Nodes()
 	rows := make([]CandidateView, 0, len(nodes))
 	active := map[string]*Tunnel{}
@@ -51,6 +53,10 @@ func (m *Manager) candidateViews() []CandidateView {
 		mark := m.selection.mark(n.IP)
 		observed := m.selection.mark(q.Identity.IP)
 		row := CandidateView{Host: n.HostName, IP: n.IP, Country: n.CountryCode, CountryName: countryLabel(n.CountryCode, n.Country), AdvertisedSpeed: n.SpeedMbps, Identity: q.Identity, Risk: m.risk.snapshot(q.Identity.IP), Quality: q, Favorite: mark.Favorite || observed.Favorite, Blocked: mark.Blocked || observed.Blocked}
+		row.Verification = verification.Results[n.HostName]
+		if verification.Current == n.HostName {
+			row.Verification.Status = "checking"
+		}
 		if t := active[n.HostName]; t != nil {
 			row.ActiveSlot = t.Slot
 			if t.Status == "up" {

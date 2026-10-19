@@ -35,6 +35,7 @@ type ProxycheckResult struct {
 
 type proxycheckData struct {
 	AdmissionEnabled bool                        `json:"admission_enabled"`
+	ObservedExits    map[string]string           `json:"observed_exits"`
 	Enabled          bool                        `json:"enabled"`
 	Entries          map[string]ProxycheckResult `json:"entries"`
 	Requests         []time.Time                 `json:"requests"`
@@ -80,6 +81,11 @@ func newProxycheckStore(dir string) *proxycheckStore {
 	if s.data.Entries == nil {
 		s.data.Entries = map[string]ProxycheckResult{}
 	}
+	// Older configurations must never restore ProxyCheck admission checks.
+	s.data.AdmissionEnabled = false
+	if s.data.ObservedExits == nil {
+		s.data.ObservedExits = map[string]string{}
+	}
 	return s
 }
 
@@ -116,7 +122,7 @@ func (s *proxycheckStore) status() map[string]any {
 	} else if s.key == "" {
 		message = "待填写 Private API Key，尚未开始查询"
 	}
-	return map[string]any{"enabled": s.data.Enabled, "key_configured": s.key != "", "used_24h": len(s.data.Requests), "limit_24h": proxycheckDailyLimit, "candidate_limit_24h": proxycheckCandidateLimit, "blocked_until": s.data.BlockedUntil, "last_error": message, "scope": "japan_and_active_exits", "observation_only": !s.data.AdmissionEnabled, "admission_enabled": s.data.AdmissionEnabled, "prefer_score": 0, "fallback_max_score": 25}
+	return map[string]any{"enabled": s.data.Enabled, "key_configured": s.key != "", "used_24h": len(s.data.Requests), "limit_24h": proxycheckDailyLimit, "blocked_until": s.data.BlockedUntil, "last_error": message, "scope": "changed_exits_only", "trigger": "on_ip_change", "hourly_queries": false, "observation_only": true, "admission_enabled": false}
 }
 
 var proxycheckKeyPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{16,256}$`)
@@ -128,6 +134,9 @@ func (s *proxycheckStore) configure(enabled *bool, key *string, admission ...*bo
 	defer s.mu.Unlock()
 	if s.loadErr != nil {
 		return fmt.Errorf("ProxyCheck 配置不可读，未覆盖现有文件")
+	}
+	if len(admission) > 0 && admission[0] != nil && *admission[0] {
+		return fmt.Errorf("ProxyCheck 仅作参考，不参与接入、排序或换 IP 判断；请使用 IPPure")
 	}
 	if key != nil && strings.TrimSpace(*key) != "" {
 		value := strings.TrimSpace(*key)
@@ -154,12 +163,14 @@ func (s *proxycheckStore) configure(enabled *bool, key *string, admission ...*bo
 		}
 		s.key = value
 		s.data.BlockedUntil, s.data.LastError = time.Time{}, ""
+		s.data.ObservedExits = map[string]string{} // Explicit key replacement may recheck current exits once.
 	}
 	old, oldAdmission := s.data.Enabled, s.data.AdmissionEnabled
-	if len(admission) > 0 && admission[0] != nil {
-		s.data.AdmissionEnabled = *admission[0]
-	}
+	s.data.AdmissionEnabled = false
 	if enabled != nil {
+		if *enabled && !s.data.Enabled {
+			s.data.ObservedExits = map[string]string{}
+		}
 		s.data.Enabled = *enabled
 	}
 	if err := s.saveLocked(); err != nil {

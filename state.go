@@ -158,8 +158,7 @@ func (m *Manager) restoreTunnel(t *Tunnel) {
 	defer t.opMu.Unlock()
 	saved := t.Node
 	t.restoreFirst = &saved
-	t.resumeSavedExit = true
-	defer func() { t.restoreFirst = nil; t.resumeSavedExit = false }()
+	defer func() { t.restoreFirst = nil }()
 	prev := t.prevHostOf()
 	if prev == "" {
 		prev = t.Node.HostName

@@ -34,12 +34,13 @@ type ProxycheckResult struct {
 }
 
 type proxycheckData struct {
-	Enabled      bool                        `json:"enabled"`
-	Entries      map[string]ProxycheckResult `json:"entries"`
-	Requests     []time.Time                 `json:"requests"`
-	LastRequest  time.Time                   `json:"last_request"`
-	BlockedUntil time.Time                   `json:"blocked_until"`
-	LastError    string                      `json:"last_error"`
+	AdmissionEnabled bool                        `json:"admission_enabled"`
+	Enabled          bool                        `json:"enabled"`
+	Entries          map[string]ProxycheckResult `json:"entries"`
+	Requests         []time.Time                 `json:"requests"`
+	LastRequest      time.Time                   `json:"last_request"`
+	BlockedUntil     time.Time                   `json:"blocked_until"`
+	LastError        string                      `json:"last_error"`
 }
 
 type proxycheckStore struct {
@@ -115,12 +116,12 @@ func (s *proxycheckStore) status() map[string]any {
 	} else if s.key == "" {
 		message = "待填写 Private API Key，尚未开始查询"
 	}
-	return map[string]any{"enabled": s.data.Enabled, "key_configured": s.key != "", "used_24h": len(s.data.Requests), "limit_24h": proxycheckDailyLimit, "candidate_limit_24h": proxycheckCandidateLimit, "blocked_until": s.data.BlockedUntil, "last_error": message, "scope": "japan_and_active_exits", "observation_only": true}
+	return map[string]any{"enabled": s.data.Enabled, "key_configured": s.key != "", "used_24h": len(s.data.Requests), "limit_24h": proxycheckDailyLimit, "candidate_limit_24h": proxycheckCandidateLimit, "blocked_until": s.data.BlockedUntil, "last_error": message, "scope": "japan_and_active_exits", "observation_only": !s.data.AdmissionEnabled, "admission_enabled": s.data.AdmissionEnabled, "prefer_score": 0, "fallback_max_score": 25}
 }
 
 var proxycheckKeyPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{16,256}$`)
 
-func (s *proxycheckStore) configure(enabled *bool, key *string) error {
+func (s *proxycheckStore) configure(enabled *bool, key *string, admission ...*bool) error {
 	s.queryMu.Lock()
 	defer s.queryMu.Unlock()
 	s.mu.Lock()
@@ -154,12 +155,16 @@ func (s *proxycheckStore) configure(enabled *bool, key *string) error {
 		s.key = value
 		s.data.BlockedUntil, s.data.LastError = time.Time{}, ""
 	}
-	old := s.data.Enabled
+	old, oldAdmission := s.data.Enabled, s.data.AdmissionEnabled
+	if len(admission) > 0 && admission[0] != nil {
+		s.data.AdmissionEnabled = *admission[0]
+	}
 	if enabled != nil {
 		s.data.Enabled = *enabled
 	}
 	if err := s.saveLocked(); err != nil {
 		s.data.Enabled = old
+		s.data.AdmissionEnabled = oldAdmission
 		return fmt.Errorf("无法保存 ProxyCheck 设置")
 	}
 	select {
@@ -248,7 +253,7 @@ func parseProxycheck(blob []byte, ip string, now time.Time) (ProxycheckResult, e
 	return r, nil
 }
 
-func (s *proxycheckStore) assess(ctx context.Context, ip string, active bool) (ProxycheckResult, error) {
+func (s *proxycheckStore) assess(ctx context.Context, ip string, active bool, fresh ...bool) (ProxycheckResult, error) {
 	s.queryMu.Lock()
 	defer s.queryMu.Unlock()
 	a := net.ParseIP(ip)
@@ -264,7 +269,8 @@ func (s *proxycheckStore) assess(ctx context.Context, ip string, active bool) (P
 		return r, fmt.Errorf("ProxyCheck 未启用或尚未配置有效 Key")
 	}
 	// Scheduled reviews happen hourly even when an anonymous result expires sooner.
-	if (r.Status == "ok" && now.Before(r.CheckedAt.Add(time.Hour))) || (r.Status != "ok" && now.Before(r.ExpiresAt)) {
+	requireFresh := len(fresh) > 0 && fresh[0]
+	if (r.Status == "ok" && now.Before(r.CheckedAt.Add(time.Hour)) && (!requireFresh || now.Before(r.ExpiresAt))) || (r.Status != "ok" && now.Before(r.ExpiresAt)) {
 		s.mu.Unlock()
 		return r, nil
 	}

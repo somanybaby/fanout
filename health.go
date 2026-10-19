@@ -118,6 +118,9 @@ func (m *Manager) launchReconnect(t *Tunnel, oldHost, oldIP, reason string) {
 
 	go func() {
 		defer t.opMu.Unlock()
+		chosen := t.Node
+		t.restoreFirst = &chosen
+		defer func() { t.restoreFirst = nil; t.handoffVerified = false }()
 		// 通知延后到 rebind/resync 之后：那两步会把入站改绑到新节点，
 		// 提前重建配置会因为入站还指着旧节点名而丢掉路由规则
 		m.bringUpPersist(t, false, true)

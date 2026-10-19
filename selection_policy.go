@@ -12,6 +12,8 @@ type SelectionPolicy struct {
 	RegionCode    string `json:"region_code,omitempty"`
 	RotateMinutes int    `json:"rotate_minutes"`
 	ProbeOnly     bool   `json:"-"`
+	RequirePCZero bool   `json:"-"`
+	AllowPCLow    bool   `json:"-"`
 	Mode          string `json:"mode"`
 	Country       string `json:"country"`
 	Host          string `json:"host,omitempty"`
@@ -122,6 +124,9 @@ func (m *Manager) policyCandidates(t *Tunnel) []Node {
 		if region != "" && !strings.EqualFold(n.CountryCode, region) {
 			return
 		}
+		if m.proxycheck.admissionEnabled() && m.nodeProxycheckRank(n) == 3 && (t.restoreFirst == nil || n.HostName != t.restoreFirst.HostName) {
+			return
+		}
 		seen[n.HostName] = true
 		candidates = append(candidates, n)
 	}
@@ -167,6 +172,12 @@ func (m *Manager) policyCandidates(t *Tunnel) []Node {
 	// Known same-region candidates precede unknown locations, then known other
 	// regions. Unknown candidates are privately verified before region fallback.
 	sort.SliceStable(pool, func(i, j int) bool {
+		if m.proxycheck.admissionEnabled() {
+			a, b := m.nodeProxycheckRank(pool[i]), m.nodeProxycheckRank(pool[j])
+			if a != b {
+				return a < b
+			}
+		}
 		rank := func(n Node) int {
 			v := m.quality.snapshot(n.HostName).Identity
 			if sameRegion(region, p.RegionCode, p.Region, v.RegionCode, v.Region) {
@@ -210,6 +221,24 @@ func (m *Manager) policyCandidates(t *Tunnel) []Node {
 			add(n)
 			if len(candidates) > before {
 				fallbackCount++
+			}
+		}
+	}
+	// Keep a bounded known-low reserve when unknown nodes fill the discovery
+	// budget. A query cooldown must not hide already-verified low fallbacks.
+	if m.proxycheck.admissionEnabled() {
+		added := 0
+		for _, n := range pool {
+			if added >= 2 {
+				break
+			}
+			if m.nodeProxycheckRank(n) != 2 || !strings.EqualFold(n.CountryCode, region) {
+				continue
+			}
+			before := len(candidates)
+			add(n)
+			if len(candidates) > before {
+				added++
 			}
 		}
 	}

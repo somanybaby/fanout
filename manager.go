@@ -102,6 +102,12 @@ func (m *Manager) StartSelected(node Node, policy SelectionPolicy) (*Tunnel, err
 	}
 
 	m.mu.Lock()
+	for _, other := range m.tunnels {
+		if other.Node.HostName == node.HostName {
+			m.mu.Unlock()
+			return nil, fmt.Errorf("该节点已被其他出口使用")
+		}
+	}
 	slot, err := m.freeSlot()
 	if err != nil {
 		m.mu.Unlock()
@@ -135,7 +141,11 @@ func (m *Manager) StartSelected(node Node, policy SelectionPolicy) (*Tunnel, err
 	m.tunnels[slot] = t
 	m.mu.Unlock()
 
-	go func() { t.opMu.Lock(); defer t.opMu.Unlock(); m.bringUp(t, true) }()
+	go func() {
+		t.opMu.Lock()
+		defer t.opMu.Unlock()
+		m.bringUpPersist(t, true, !policy.ProbeOnly && (policy.Mode != "auto" || riskFilterEnabled()))
+	}()
 	return t, nil
 }
 

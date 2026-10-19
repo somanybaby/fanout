@@ -201,3 +201,28 @@ func TestSelectionRejectsActiveIPExclusion(t *testing.T) {
 		t.Fatal("active IP excluded unexpectedly")
 	}
 }
+
+func TestSelectionPreflightNoSpareSlotKeepsWorkingExit(t *testing.T) {
+	m, tn := selectionFixture(t)
+	m.maxSlots = 1
+	tn.egressReady.Store(true)
+	before := tn.Cred
+	tn.opMu.Lock()
+	m.prepareSwitch(tn, m.nodes[1], tn.selectionPolicy(), "定时轮换测试")
+	deadline := time.Now().Add(2 * time.Second)
+	finished := false
+	for time.Now().Before(deadline) {
+		if tn.opMu.TryLock() {
+			tn.opMu.Unlock()
+			finished = true
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !finished {
+		t.Fatal("preflight did not finish")
+	}
+	if tn.Status != "up" || tn.ExitIP != "1.1.1.1" || tn.Cred != before || !tn.egressReady.Load() {
+		t.Fatal("failed preflight interrupted working exit")
+	}
+}

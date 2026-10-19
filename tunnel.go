@@ -39,6 +39,7 @@ type Tunnel struct {
 	retryAfter          time.Time
 	skipHostOnce        string
 	lastRotationAttempt time.Time
+	lastRecoveryAttempt time.Time       // guarded by opMu
 	Policy              SelectionPolicy `json:"selection"`
 	opMu                sync.Mutex
 	egressReady         atomic.Bool

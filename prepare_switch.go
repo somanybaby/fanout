@@ -43,6 +43,11 @@ func (m *Manager) prepareSwitch(t *Tunnel, chosen Node, policy SelectionPolicy, 
 				if m.proxycheck.admissionEnabled() && pcRank == 3 {
 					continue
 				}
+				if m.proxycheck.admissionEnabled() && pcRank == 1 && !m.proxycheck.admissionQueryWait().IsZero() {
+					// Do not tear down a usable parent or start a futile VPN while
+					// provider authentication, quota or cooldown blocks new scores.
+					continue
+				}
 				if !m.proxycheck.admissionEnabled() || pcRank == 0 || (pcRank == 2 && scorePhase == 1) {
 					if until := m.risk.queryWait(n.IP, m.quality.snapshot(n.HostName).Identity.IP); !until.IsZero() {
 						m.selection.addEvent(SelectionEvent{Slot: t.Slot, Kind: "prepare_wait", Reason: "IPPure 查询冷却中，保留当前出口，稍后重试", Country: policy.Country, OldIP: oldIP})

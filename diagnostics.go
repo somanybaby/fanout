@@ -23,6 +23,9 @@ type ProbeResult struct {
 }
 
 type ExitIdentity struct {
+	Region      string    `json:"region"`
+	RegionCode  string    `json:"region_code"`
+	City        string    `json:"city"`
 	IP          string    `json:"ip"`
 	Country     string    `json:"country"`
 	Operator    string    `json:"operator"`
@@ -201,6 +204,9 @@ func lookupExitIdentity(t *Tunnel, ip string) (ExitIdentity, error) {
 		Success    bool   `json:"success"`
 		IP         string `json:"ip"`
 		Country    string `json:"country_code"`
+		Region     string `json:"region"`
+		RegionCode string `json:"region_code"`
+		City       string `json:"city"`
 		Connection struct {
 			ASN int    `json:"asn"`
 			Org string `json:"org"`
@@ -210,6 +216,9 @@ func lookupExitIdentity(t *Tunnel, ip string) (ExitIdentity, error) {
 	if !p.OK || json.Unmarshal(body, &raw) != nil || !raw.Success || raw.IP != ip || len(raw.Country) != 2 {
 		return info, fmt.Errorf("无法核验实际出口国家")
 	}
+	info.Region = raw.Region
+	info.RegionCode = raw.RegionCode
+	info.City = raw.City
 	info.Country = raw.Country
 	info.Operator = raw.Connection.ISP
 	if info.Operator == "" {

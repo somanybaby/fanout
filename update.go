@@ -210,7 +210,7 @@ func applyUpdate() error {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
-	for _, name := range []string{"state.json", "settings.json", "password", "basepath", "xui-token", "native-inbounds.json"} {
+	for _, name := range []string{"state.json", "settings.json", "password", "basepath", "xui-token", "native-inbounds.json", "selections.json", "quality.json", "risk-cache.json"} {
 		src := filepath.Join(filepath.Dir(webSettingsPath), name)
 		if _, err := os.Stat(src); os.IsNotExist(err) {
 			continue

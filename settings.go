@@ -16,6 +16,7 @@ import (
 // 界面改完即时生效。访问口令与访问路径各有专门的文件（password / basepath），
 // 不放这里，但都能在设置面板里改。
 type WebSettings struct {
+	RiskFilterEnabled bool `json:"risk_filter_enabled"`
 	// Port 是管理界面监听端口。
 	Port int `json:"port"`
 	// ListenAddr 是监听地址：空或 0.0.0.0 表示所有网卡；127.0.0.1 表示只本机。

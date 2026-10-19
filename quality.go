@@ -10,12 +10,14 @@ import (
 )
 
 type NodeQuality struct {
-	Successes           int       `json:"successes"`
-	Failures            int       `json:"failures"`
-	ConsecutiveFailures int       `json:"consecutive_failures"`
-	LatencyMS           float64   `json:"latency_ms"`
-	LastSuccess         time.Time `json:"last_success"`
-	CooldownUntil       time.Time `json:"cooldown_until"`
+	Identity            ExitIdentity `json:"identity"`
+	LastChecked         time.Time    `json:"last_checked"`
+	Successes           int          `json:"successes"`
+	Failures            int          `json:"failures"`
+	ConsecutiveFailures int          `json:"consecutive_failures"`
+	LatencyMS           float64      `json:"latency_ms"`
+	LastSuccess         time.Time    `json:"last_success"`
+	CooldownUntil       time.Time    `json:"cooldown_until"`
 }
 
 type qualityStore struct {
@@ -45,6 +47,7 @@ func (q *qualityStore) record(host string, success bool, latency int64) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	n := q.Nodes[host]
+	n.LastChecked = time.Now().UTC()
 	if success {
 		n.Successes++
 		n.ConsecutiveFailures = 0
@@ -103,4 +106,26 @@ func (q *qualityStore) rank(nodes []Node) []Node {
 		return out[i].SpeedMbps > out[j].SpeedMbps
 	})
 	return out
+}
+
+func (q *qualityStore) snapshot(host string) NodeQuality {
+	if q == nil {
+		return NodeQuality{}
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.Nodes[host]
+}
+func (q *qualityStore) identify(host string, identity ExitIdentity) {
+	if q == nil {
+		return
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	n := q.Nodes[host]
+	n.Identity = identity
+	q.Nodes[host] = n
+	if q.path != "" {
+		_ = atomicPrivateJSON(q.path, q.Nodes)
+	}
 }

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,16 +23,27 @@ type SocksCred struct {
 
 // Tunnel 是一条运行中的隧道：一个 netns + 一个 openvpn 进程 + 一个本地 SOCKS5 端口。
 type Tunnel struct {
-	Slot            int               `json:"slot"`
-	Port            int               `json:"port"`
-	Node            Node              `json:"node"`
-	Status          string            `json:"status"` // starting | up | failed | stopped
-	Identity        ExitIdentity      `json:"identity"`
-	LastDiagnostics TunnelDiagnostics `json:"diagnostics"`
-	ExitIP          string            `json:"exit_ip"`
-	Err             string            `json:"err,omitempty"`
-	Since           time.Time         `json:"since"`
-	Cred            SocksCred         `json:"cred"`
+	cancelled           atomic.Bool
+	stopOnce            sync.Once
+	stopCh              chan struct{}
+	Risk                RiskAssessment `json:"risk"`
+	allowRegionFallback bool
+	retryAfter          time.Time
+	skipHostOnce        string
+	lastRotationAttempt time.Time
+	Policy              SelectionPolicy `json:"selection"`
+	opMu                sync.Mutex
+	egressReady         atomic.Bool
+	Slot                int               `json:"slot"`
+	Port                int               `json:"port"`
+	Node                Node              `json:"node"`
+	Status              string            `json:"status"` // starting | up | failed | stopped
+	Identity            ExitIdentity      `json:"identity"`
+	LastDiagnostics     TunnelDiagnostics `json:"diagnostics"`
+	ExitIP              string            `json:"exit_ip"`
+	Err                 string            `json:"err,omitempty"`
+	Since               time.Time         `json:"since"`
+	Cred                SocksCred         `json:"cred"`
 
 	ns       string
 	listener net.Listener
@@ -213,6 +225,7 @@ func ensureRuleInsert(table, chain string, spec ...string) {
 }
 
 func (t *Tunnel) teardownNetns() {
+	t.egressReady.Store(false)
 	ns, sub := t.nsName(), t.subnet()
 	cidr := sub + ".0/30"
 	veth, _ := t.vethNames()
@@ -256,6 +269,9 @@ func (t *Tunnel) startOpenVPN(dir string) error {
 	// openvpn 建好 tun0 前 SOCKS5 无法正常出网，这里等它就绪
 	deadline := time.Now().Add(40 * time.Second)
 	for time.Now().Before(deadline) {
+		if t.cancelled.Load() {
+			return fmt.Errorf("出口已停止")
+		}
 		if out, err := cmdOutput(exec.Command("ip", "netns", "exec", ns, "ip", "-4", "addr", "show", "tun0")); err == nil {
 			if strings.Contains(string(out), "inet ") {
 				return nil
@@ -278,7 +294,7 @@ func (t *Tunnel) serve() error {
 	var ln net.Listener
 	var err error
 	for i := 0; i < 6; i++ {
-		ln, err = net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", t.Port))
+		err = inMainNetns(func() error { var e error; ln, e = net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", t.Port)); return e })
 		if err == nil {
 			break
 		}
@@ -290,14 +306,20 @@ func (t *Tunnel) serve() error {
 		if perr != nil {
 			return fmt.Errorf("监听 %d 失败且无备用端口: %w", t.Port, err)
 		}
-		ln, err = net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
+		err = inMainNetns(func() error { var e error; ln, e = net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port)); return e })
 		if err != nil {
 			return fmt.Errorf("监听 %d 失败: %w", port, err)
 		}
 		t.Port = port
 	}
 	t.listener = ln
-	dial := dialerInNetns(t.nsName())
+	rawDial := dialerInNetns(t.nsName())
+	dial := func(network, addr string) (net.Conn, error) {
+		if !t.egressReady.Load() {
+			return nil, fmt.Errorf("出口尚未完成核验")
+		}
+		return rawDial(network, addr)
+	}
 
 	go func() {
 		for {
@@ -344,6 +366,7 @@ func (t *Tunnel) probeExitIP() (string, error) {
 
 // stop 停止这条隧道并清理它占用的所有资源。
 func (t *Tunnel) stop() {
+	t.egressReady.Store(false)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.listener != nil {

@@ -11,12 +11,15 @@ import (
 // persistedTunnel 是隧道在磁盘上的形态。
 // 只存重建所需的信息，运行态（netns、进程、监听）重启后重新建立。
 type persistedTunnel struct {
-	Slot        int    `json:"slot"`
-	Port        int    `json:"port"`
-	HostName    string `json:"hostname"`
-	CountryCode string `json:"country_code"`
-	Country     string `json:"country"`
-	Config      string `json:"config"`
+	Policy          SelectionPolicy `json:"selection"`
+	PreferredNode   *Node           `json:"preferred_node,omitempty"`
+	PreferredConfig string          `json:"preferred_config,omitempty"`
+	Slot            int             `json:"slot"`
+	Port            int             `json:"port"`
+	HostName        string          `json:"hostname"`
+	CountryCode     string          `json:"country_code"`
+	Country         string          `json:"country"`
+	Config          string          `json:"config"`
 	// SOCKS5 凭据要存盘：用户已经把它分发给客户端了，重启后变掉等于全断
 	SocksUser string `json:"socks_user,omitempty"`
 	SocksPass string `json:"socks_pass,omitempty"`
@@ -33,14 +36,23 @@ func statePath(dir string) string { return filepath.Join(dir, "state.json") }
 
 // saveState 把当前隧道写入磁盘，供重启后恢复。
 func (m *Manager) saveState() error {
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
 	var st persistedState
 	for _, t := range m.Tunnels() {
 		// 只跳过用户主动停掉的。starting/failed 的隧道也要存：
 		// 它们正在重连或等着重试，漏存会让重启后凭空少几个出口。
-		if t.Status == "stopped" {
+		if t.Status == "stopped" || t.selectionPolicy().ProbeOnly {
 			continue
 		}
+		policy := t.selectionPolicy()
+		var preferred *Node
+		if policy.Mode == "strict" || policy.Mode == "preferred" {
+			n := policy.Preferred
+			preferred = &n
+		}
 		st.Tunnels = append(st.Tunnels, persistedTunnel{
+			Policy: policy, PreferredNode: preferred, PreferredConfig: policy.Preferred.Config,
 			Slot:        t.Slot,
 			Port:        t.Port,
 			HostName:    t.Node.HostName,
@@ -53,15 +65,7 @@ func (m *Manager) saveState() error {
 		})
 	}
 
-	blob, err := json.MarshalIndent(st, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := statePath(m.workDir) + ".tmp"
-	if err := os.WriteFile(tmp, blob, 0600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, statePath(m.workDir))
+	return atomicPrivateJSON(statePath(m.workDir), st)
 }
 
 // restoreState 读回上次的隧道并逐条拉起。
@@ -106,7 +110,30 @@ func (m *Manager) restoreState() (int, error) {
 			}
 			cred = gen
 		}
+		policy := p.Policy
+		if policy.Mode == "" {
+			policy.Mode = "auto"
+		}
+		if policy.Country == "" {
+			policy.Country = p.CountryCode
+		}
+		if p.PreferredNode != nil {
+			policy.Preferred = *p.PreferredNode
+			policy.Preferred.Config = p.PreferredConfig
+		}
+		if policy.Mode != "auto" {
+			preferred := policy.Preferred
+			if preferred.HostName == "" {
+				preferred = node
+				policy.Preferred = node
+			}
+			if _, err := normalizePolicy(policy, preferred); err != nil {
+				return 0, fmt.Errorf("已保存的 IP 选择规则无效: %w", err)
+			}
+		}
 		t := &Tunnel{
+			stopCh: make(chan struct{}),
+			Policy: policy,
 			Slot:   p.Slot,
 			Port:   p.Port,
 			Node:   node,
@@ -124,9 +151,15 @@ func (m *Manager) restoreState() (int, error) {
 
 // restoreTunnel 拉起一条恢复出来的隧道，顺手把上次没做完的换节点收尾。
 func (m *Manager) restoreTunnel(t *Tunnel) {
+	t.opMu.Lock()
+	defer t.opMu.Unlock()
 	prev := t.prevHostOf()
+	if prev == "" {
+		prev = t.Node.HostName
+	}
+	t.setPrevHost(prev)
 	m.bringUpPersist(t, true, true)
-	if prev == "" || t.Status != "up" {
+	if t.Status != "up" {
 		return
 	}
 	// 上次换节点改完隧道就中断了，入站还指着旧节点。不接回来的话它会一直

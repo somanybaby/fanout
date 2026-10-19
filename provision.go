@@ -252,11 +252,17 @@ func (m *Manager) noNodesErrLocked(region string, filtered bool) error {
 // 否则改一下设置就把用户手上所有出口的 IP 全换了。
 func (m *Manager) nodePoolLocked() []Node {
 	if !residentialOnly() {
-		return m.quality.rank(m.nodes)
+		out := []Node{}
+		for _, n := range m.nodes {
+			if !m.nodeBlocked(n) {
+				out = append(out, n)
+			}
+		}
+		return m.quality.rank(out)
 	}
 	out := make([]Node, 0, len(m.nodes))
 	for _, n := range m.nodes {
-		if n.Residential {
+		if n.Residential && !m.nodeBlocked(n) {
 			out = append(out, n)
 		}
 	}

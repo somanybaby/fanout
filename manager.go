@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os/exec"
@@ -11,22 +12,27 @@ import (
 
 // Manager 维护所有隧道，负责分配槽位与端口。
 type Manager struct {
-	mu       sync.RWMutex
-	tunnels  map[int]*Tunnel
-	nodes    []Node
-	fetched  time.Time
-	workDir  string
-	maxSlots int
-	jobs     JobStore
-	quality  *qualityStore
+	stateMu   sync.Mutex
+	selection *selectionStore
+	risk      *riskStore
+	mu        sync.RWMutex
+	tunnels   map[int]*Tunnel
+	nodes     []Node
+	fetched   time.Time
+	workDir   string
+	maxSlots  int
+	jobs      JobStore
+	quality   *qualityStore
 }
 
 func NewManager(maxSlots int, workDir string) *Manager {
 	return &Manager{
-		tunnels:  map[int]*Tunnel{},
-		workDir:  workDir,
-		maxSlots: maxSlots,
-		quality:  newQualityStore(workDir),
+		tunnels:   map[int]*Tunnel{},
+		workDir:   workDir,
+		maxSlots:  maxSlots,
+		quality:   newQualityStore(workDir),
+		selection: newSelectionStore(workDir),
+		risk:      newRiskStore(workDir),
 	}
 }
 
@@ -85,7 +91,16 @@ func (m *Manager) freeSlot() (int, error) {
 }
 
 // Start 为指定节点开一条隧道，返回分配到的本地端口。
-func (m *Manager) Start(node Node) (*Tunnel, error) {
+func (m *Manager) Start(node Node) (*Tunnel, error) { return m.StartSelected(node, SelectionPolicy{}) }
+func (m *Manager) StartSelected(node Node, policy SelectionPolicy) (*Tunnel, error) {
+	policy, err := normalizePolicy(policy, node)
+	if err != nil {
+		return nil, err
+	}
+	if m.nodeBlocked(node) {
+		return nil, fmt.Errorf("节点已排除或排除列表不可用")
+	}
+
 	m.mu.Lock()
 	slot, err := m.freeSlot()
 	if err != nil {
@@ -108,17 +123,19 @@ func (m *Manager) Start(node Node) (*Tunnel, error) {
 		return nil, err
 	}
 	t := &Tunnel{
+		stopCh: make(chan struct{}),
 		Slot:   slot,
 		Port:   port,
 		Node:   node,
 		Status: "starting",
 		Since:  time.Now(),
 		Cred:   cred,
+		Policy: policy,
 	}
 	m.tunnels[slot] = t
 	m.mu.Unlock()
 
-	go m.bringUp(t, true)
+	go func() { t.opMu.Lock(); defer t.opMu.Unlock(); m.bringUp(t, true) }()
 	return t, nil
 }
 
@@ -163,9 +180,20 @@ func (m *Manager) bringUpPersist(t *Tunnel, notify bool, persist bool) {
 		}
 
 		t.Status = "starting"
-		t.Err = fmt.Sprintf("暂无可用节点，%.0f 秒后重试", backoff.Seconds())
+		wait := backoff
+		if left := time.Until(t.retryAfter); left > wait {
+			wait = left
+			if wait > time.Minute {
+				wait = time.Minute
+			}
+		}
+		t.Err = fmt.Sprintf("暂无合格出口，%.0f 秒后重试", wait.Seconds())
 		log.Printf("隧道 %d 一轮候选均失败，%.0f 秒后刷新节点重试", t.Slot, backoff.Seconds())
-		time.Sleep(backoff)
+		select {
+		case <-time.After(wait):
+		case <-t.stopCh:
+			return
+		}
 		if !m.tunnelActive(t) {
 			return
 		}
@@ -183,39 +211,68 @@ func (m *Manager) bringUpPersist(t *Tunnel, notify bool, persist bool) {
 
 // tryCandidates 走一轮候选节点，成功返回 true。失败不改 Status（留给调用方决定）。
 func (m *Manager) tryCandidates(t *Tunnel, notify bool) bool {
-	// VPN Gate 是志愿者节点，列表里有相当比例已下线或满员（AUTH_FAILED），
-	// 连不上就顺着候选列表换下一个，不必让用户手动试。
 	candidates := m.candidatesFor(t)
-	for i, node := range candidates {
-		if !m.tunnelActive(t) {
-			return false
+	deferred := []Node{}
+	for phase := 0; phase < 2; phase++ {
+		if phase == 1 {
+			candidates = deferred
 		}
-		// 其他隧道可能在重试期间占用了这个节点，跳过以免多个端口撞同一出口 IP
-		if i > 0 && m.nodeInUse(node.HostName, t.Slot) {
-			continue
-		}
-		t.Node = node
-		t.Status = "starting"
-		if i > 0 {
-			t.Err = fmt.Sprintf("已换到第 %d 个候选节点", i+1)
-		}
-
-		err := m.tryNode(t)
-		if err == nil {
-			t.Status = "up"
-			t.Err = ""
-			t.Since = time.Now()
-			if serr := m.saveState(); serr != nil {
-				log.Printf("保存状态失败: %v", serr)
+		t.allowRegionFallback = phase == 1
+		for i, node := range candidates {
+			if !m.tunnelActive(t) {
+				return false
 			}
-			if notify {
-				m.notifyPanel()
+			if m.nodeInUse(node.HostName, t.Slot) {
+				continue
 			}
-			return true
+			t.Node = node
+			t.Status = "starting"
+			t.Err = fmt.Sprintf("核验第 %d 个候选出口", i+1)
+			err := m.tryNode(t)
+			if err == nil {
+				t.Status = "up"
+				t.Err = ""
+				t.Since = time.Now()
+				m.selection.addEvent(SelectionEvent{Slot: t.Slot, Kind: "connected", Reason: func() string {
+					if phase == 1 {
+						return "暂无同地区合格候选，接入同国家备用出口"
+					}
+					return "出口核验通过"
+				}(), Country: t.selectionPolicy().Country, NewIP: t.ExitIP})
+				if serr := m.saveState(); serr != nil {
+					log.Printf("保存状态失败: %v", serr)
+				}
+				if notify {
+					m.notifyPanel()
+				}
+				t.allowRegionFallback = false
+				t.skipHostOnce = ""
+				t.retryAfter = time.Time{}
+				return true
+			}
+			t.Err = err.Error()
+			var outside *otherRegionError
+			var waiting *riskWaitError
+			switch {
+			case errors.As(err, &outside):
+				deferred = append(deferred, node)
+			case errors.As(err, &waiting):
+				t.retryAfter = waiting.Until
+			default:
+				m.quality.record(node.HostName, false, 0)
+				m.selection.addEvent(SelectionEvent{Slot: t.Slot, Kind: "attempt_failed", Reason: err.Error(), Country: t.selectionPolicy().Country})
+			}
+			if t.ovpn != nil && t.ovpn.Process != nil {
+				_ = t.ovpn.Process.Kill()
+				t.ovpn = nil
+			}
+			t.teardownNetns()
+			if waiting != nil {
+				break
+			}
 		}
-		m.quality.record(node.HostName, false, 0)
-		t.teardownNetns()
 	}
+	t.allowRegionFallback = false
 	return false
 }
 
@@ -223,7 +280,7 @@ func (m *Manager) tryCandidates(t *Tunnel, notify bool) bool {
 // 用指针比对：Stop 会从 map 里删除并把 Status 置 stopped，
 // 重连循环据此退出，避免对着一条已经不存在的隧道空转。
 func (m *Manager) tunnelActive(t *Tunnel) bool {
-	if t.Status == "stopped" {
+	if t.cancelled.Load() || t.Status == "stopped" {
 		return false
 	}
 	m.mu.RLock()
@@ -234,6 +291,9 @@ func (m *Manager) tunnelActive(t *Tunnel) bool {
 
 // tryNode 尝试用当前节点把隧道拉起来。
 func (m *Manager) tryNode(t *Tunnel) error {
+	if t.cancelled.Load() {
+		return fmt.Errorf("出口已停止")
+	}
 	if err := t.setupNetns(); err != nil {
 		return err
 	}
@@ -243,22 +303,42 @@ func (m *Manager) tryNode(t *Tunnel) error {
 	if err := t.startOpenVPN(m.workDir); err != nil {
 		return err
 	}
-	if t.listener == nil {
-		if err := t.serve(); err != nil {
-			return err
-		}
+	if t.cancelled.Load() {
+		return fmt.Errorf("出口已停止")
 	}
-	probe, ip := probeSOCKSExit(t)
-	if !probe.OK {
-		return fmt.Errorf("认证 SOCKS 出口检查失败")
-	}
-	identity, err := lookupExitIdentity(t, ip)
+	probeTunnel, closeProbe, err := t.privateProbe()
 	if err != nil {
 		return err
 	}
-	if t.Node.CountryCode != "" && identity.Country != t.Node.CountryCode {
-		return fmt.Errorf("实际出口国家 %s 与选择的 %s 不符", identity.Country, t.Node.CountryCode)
+	defer closeProbe()
+	probe, ip := probeSOCKSExit(probeTunnel)
+	if !probe.OK {
+		return fmt.Errorf("认证 SOCKS 出口检查失败")
 	}
+	identity, err := lookupExitIdentity(probeTunnel, ip)
+	if err != nil {
+		return err
+	}
+	m.quality.identify(t.Node.HostName, identity)
+	if err := m.checkExitPolicy(t, ip, identity.Country); err != nil {
+		return err
+	}
+	if err := m.verifyRisk(t, probeTunnel, ip, identity.Country); err != nil {
+		return err
+	}
+	if riskFilterEnabled() {
+		r := t.Risk
+		if r.Region != "" {
+			identity.Region = r.Region
+			identity.RegionCode = r.RegionCode
+			identity.City = r.City
+			m.quality.identify(t.Node.HostName, identity)
+		}
+	}
+	if err := m.checkRegionPreference(t, identity); err != nil {
+		return err
+	}
+	m.rememberRegion(t, identity)
 	if residentialOnly() && identity.Residential == "hosting" {
 		return fmt.Errorf("实际出口为已知机房节点")
 	}
@@ -266,6 +346,16 @@ func (m *Manager) tryNode(t *Tunnel) error {
 	t.Identity = identity
 	t.mu.Unlock()
 	t.ExitIP = ip
+	if t.cancelled.Load() {
+		return fmt.Errorf("出口已停止")
+	}
+	if t.listener == nil {
+		if err := t.serve(); err != nil {
+			return err
+		}
+	}
+	t.egressReady.Store(true)
+	m.quality.identify(t.Node.HostName, identity)
 	m.quality.record(t.Node.HostName, true, probe.LatencyMS)
 	return nil
 }
@@ -275,61 +365,36 @@ func (m *Manager) tryNode(t *Tunnel) error {
 // 打头的一定是 t.Node：自动重连的目标是把这条出口恢复原样，先试原节点。
 // 备选会避开用户手动换掉过的节点——那些是他明确不想要的 IP，
 // 让重连悄悄换回去等于撤销了他的操作。
-func (m *Manager) candidatesFor(t *Tunnel) []Node {
-	const maxTries = 6
-	first := t.Node
-	avoid := t.swapAvoid()
-
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	used := map[string]bool{first.HostName: true}
-	for _, other := range m.tunnels {
-		used[other.Node.HostName] = true
-	}
-
-	// 地区决定了备选范围，缺失时先从当前列表补一次，
-	// 否则会退化成"任意地区都算同区"。
-	region := first.CountryCode
-	if region == "" {
-		for _, n := range m.nodes {
-			if n.HostName == first.HostName {
-				region = n.CountryCode
-				break
-			}
-		}
-	}
-
-	out := []Node{first}
-	for _, n := range m.nodePoolLocked() {
-		if len(out) >= maxTries {
-			break
-		}
-		if used[n.HostName] || avoid[n.HostName] {
-			continue
-		}
-		// 缺少国家信息时保留当前节点，不自动跨国切换
-		if region == "" || n.CountryCode != region {
-			continue
-		}
-		out = append(out, n)
-	}
-	return out
-}
+func (m *Manager) candidatesFor(t *Tunnel) []Node { return m.policyCandidates(t) }
 
 // Stop 停掉一条隧道并释放槽位。
 func (m *Manager) Stop(slot int) error {
 	invalidateInbounds()
-	m.mu.Lock()
-	t, ok := m.tunnels[slot]
-	if ok {
-		delete(m.tunnels, slot)
-	}
-	m.mu.Unlock()
-	if !ok {
+	m.mu.RLock()
+	t := m.tunnels[slot]
+	m.mu.RUnlock()
+	if t == nil {
 		return fmt.Errorf("槽位 %d 没有运行中的隧道", slot)
 	}
+	t.cancelled.Store(true)
+	t.egressReady.Store(false)
+	t.stopOnce.Do(func() {
+		if t.stopCh != nil {
+			close(t.stopCh)
+		}
+	})
+	// Do not release the slot until the previous worker and namespace have
+	// finished. Otherwise a late cleanup could destroy the next user's tunnel.
+	t.opMu.Lock()
+	defer t.opMu.Unlock()
+	m.mu.Lock()
+	if m.tunnels[slot] != t {
+		m.mu.Unlock()
+		return nil
+	}
 	t.stop()
+	delete(m.tunnels, slot)
+	m.mu.Unlock()
 	if err := m.saveState(); err != nil {
 		log.Printf("保存状态失败: %v", err)
 	}
@@ -347,22 +412,35 @@ func (m *Manager) Stop(slot int) error {
 // 于是再点一次就换回了 A。历史让每次点击都真的换一个没用过的。
 func (m *Manager) Swap(slot int) error {
 	m.mu.RLock()
-	t, ok := m.tunnels[slot]
+	t := m.tunnels[slot]
 	m.mu.RUnlock()
-	if !ok {
-		return fmt.Errorf("槽位 %d 没有运行中的隧道", slot)
+	if t == nil {
+		return fmt.Errorf("出口不存在")
 	}
-	if t.Status == "starting" {
-		return fmt.Errorf("这个出口正在连接中，稍等一下")
+	if !t.opMu.TryLock() {
+		return fmt.Errorf("出口正在操作中")
 	}
-
+	if t.Status == "starting" || t.Status == "stopped" {
+		t.opMu.Unlock()
+		return fmt.Errorf("出口正在连接或已停止")
+	}
+	if t.selectionPolicy().Mode == "strict" {
+		t.opMu.Unlock()
+		return fmt.Errorf("严格锁定模式下不能自动换 IP，请先修改模式或手动选用 IP")
+	}
 	node, err := m.pickSwapTarget(t)
 	if err != nil {
+		t.opMu.Unlock()
 		return err
 	}
-	oldHost := t.Node.HostName
-	t.Node = node
-	m.reconnect(t, oldHost)
+	p := t.selectionPolicy()
+	if p.Mode == "preferred" {
+		p.Mode = "auto"
+		p.Host = ""
+		p.IP = ""
+		p.Preferred = Node{}
+	}
+	m.prepareSwitch(t, node, p, "手动换一个")
 	return nil
 }
 

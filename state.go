@@ -156,6 +156,7 @@ func (m *Manager) restoreState() (int, error) {
 func (m *Manager) restoreTunnel(t *Tunnel) {
 	t.opMu.Lock()
 	defer t.opMu.Unlock()
+	oldIP := t.savedExitIP()
 	saved := t.Node
 	t.restoreFirst = &saved
 	defer func() { t.restoreFirst = nil }()
@@ -180,4 +181,5 @@ func (m *Manager) restoreTunnel(t *Tunnel) {
 	if err := m.saveState(); err != nil {
 		log.Printf("保存状态失败: %v", err)
 	}
+	m.notifyIPChange(t, oldIP, "程序恢复时实际出口 IP 变更")
 }

@@ -12,6 +12,7 @@ import (
 
 // Manager 维护所有隧道，负责分配槽位与端口。
 type Manager struct {
+	telegram     *telegramStore
 	proxycheck   *proxycheckStore
 	verification *verificationStore
 	probes       map[int]*Tunnel // isolated batch probes; never client exits
@@ -30,6 +31,7 @@ type Manager struct {
 
 func NewManager(maxSlots int, workDir string) *Manager {
 	return &Manager{
+		telegram:     newTelegramStore(workDir),
 		proxycheck:   newProxycheckStore(workDir),
 		verification: newVerificationStore(workDir),
 		probes:       map[int]*Tunnel{},
@@ -589,6 +591,9 @@ func (m *Manager) syncCred(t *Tunnel) {
 
 // Shutdown 停掉运行态但保留状态文件，让下次启动能恢复同样的隧道。
 func (m *Manager) Shutdown() {
+	if m.telegram != nil {
+		m.telegram.stop()
+	}
 	m.proxycheck.stop()
 	m.verification.stop()
 	for _, t := range m.Tunnels() {

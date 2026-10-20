@@ -193,6 +193,7 @@ func (m *Manager) launchReconnect(t *Tunnel, oldHost, oldIP, reason string) {
 		if err := m.saveState(); err != nil {
 			log.Printf("保存状态失败: %v", err)
 		}
+		m.notifyIPChange(t, oldIP, reason)
 	}()
 }
 

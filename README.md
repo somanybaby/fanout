@@ -1,6 +1,8 @@
 # Fanout 自有维护版本
 
-基于 [byJoey/fanout v1.3.1](https://github.com/byJoey/fanout/tree/v1.3.1) 二次修改，保留原许可证和提交历史。自有更新渠道：[somanybaby/fanout Releases](https://github.com/somanybaby/fanout/releases)。当前维护版本：v1.6.0。
+基于 [byJoey/fanout v1.3.1](https://github.com/byJoey/fanout/tree/v1.3.1) 二次修改，保留原许可证和提交历史。自有更新渠道：[somanybaby/fanout Releases](https://github.com/somanybaby/fanout/releases)。当前维护版本：v1.7.0。
+
+- **Telegram 换 IP 通知**：“IP 列表”填写自己的 Bot Token、Chat ID 并保存启用，先向机器人发送 `/start`，可点击“发送测试通知”验证。新出口核验、入站绑定成功后才通知原 IP、新 IP、现有 IPPure 风险分及下次计划轮换时间（UTC+8）；不额外查询评分。同 IP 重连、试连及失败切换不通知。计划时间按本次连接及轮换设置计算，异常可提前、无合格候选可延后。Token 保存在服务器 0600 私有文件，API、页面和日志不回显；通知异步入队，失败最多尝试三次并遵守 Telegram 限频，重启保留待发送队列。通知失败不影响节点。
 
 - **健康恢复保护**：连续三次探测失败后，若 VPN 进程仍存活，先保留原隧道并在备用槽位核验接替节点；无 IPPure 合格候选时不主动拆掉旧连接。进程已退出时可恢复同节点的最后已核验实际 IP，变化后的 IP 仍须通过 IPPure 和国家核验。暂时被关闭的出口，只在私有探测确认原 IP 恢复且未被排除、未受严格锁定高风险暂停限制时恢复服务。
 

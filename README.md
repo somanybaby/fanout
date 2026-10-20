@@ -1,6 +1,6 @@
 # Fanout 自有维护版本
 
-基于 [byJoey/fanout v1.3.1](https://github.com/byJoey/fanout/tree/v1.3.1) 二次修改，保留原许可证和提交历史。自有更新渠道：[somanybaby/fanout Releases](https://github.com/somanybaby/fanout/releases)。当前维护版本：v1.7.0。
+基于 [byJoey/fanout v1.3.1](https://github.com/byJoey/fanout/tree/v1.3.1) 二次修改，保留原许可证和提交历史。自有更新渠道：[somanybaby/fanout Releases](https://github.com/somanybaby/fanout/releases)。当前维护版本：v1.7.1。
 
 - **Telegram 换 IP 通知**：“IP 列表”填写自己的 Bot Token、Chat ID 并保存启用，先向机器人发送 `/start`，可点击“发送测试通知”验证。新出口核验、入站绑定成功后才通知原 IP、新 IP、现有 IPPure 风险分及下次计划轮换时间（UTC+8）；不额外查询评分。同 IP 重连、试连及失败切换不通知。计划时间按本次连接及轮换设置计算，异常可提前、无合格候选可延后。Token 保存在服务器 0600 私有文件，API、页面和日志不回显；通知异步入队，失败最多尝试三次并遵守 Telegram 限频，重启保留待发送队列。通知失败不影响节点。
 

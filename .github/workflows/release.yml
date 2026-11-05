@@ -14,6 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check repository privacy
+        run: python3 .github/scripts/check_privacy.py
       - uses: actions/setup-go@v5
         with:
           go-version: '1.24'

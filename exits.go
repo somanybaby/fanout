@@ -44,7 +44,9 @@ type Exit struct {
 
 // ExitsView 是主界面需要的全部数据。
 type ExitsView struct {
-	Exits []Exit `json:"exits"`
+	Capacity       int    `json:"capacity"`
+	AvailableSlots int    `json:"available_slots"`
+	Exits          []Exit `json:"exits"`
 	// Direct 是没绑到任何出口的入站，仍然要能看见，否则用户会以为它们不见了
 	Direct []ExitInbound `json:"direct"`
 	Panel  string        `json:"panel"` // 面板不可用时的原因，空表示正常
@@ -97,6 +99,10 @@ func invalidateInbounds() {
 func (m *Manager) ExitsOf() ExitsView {
 	tunnels := m.Tunnels()
 	view := ExitsView{Exits: make([]Exit, 0, len(tunnels)), PublicIP: hostPublicIP()}
+	m.mu.RLock()
+	view.Capacity = m.maxSlots
+	view.AvailableSlots = max(0, m.maxSlots-len(m.tunnels)-len(m.probes))
+	m.mu.RUnlock()
 
 	// 先填后端类型：入站读取失败时界面仍要知道当前是哪种模式
 	if p, err := openPanel(); err == nil {

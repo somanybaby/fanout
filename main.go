@@ -376,6 +376,7 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 		ResidentialOnly   *bool     `json:"residential_only"` // 提供即改"只用家宽"
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Fanout-UI", "embedded")
 		if r.Method == http.MethodPost {
 			var in settingsReq
 			if err := json.NewDecoder(r.Body).Decode(&in); err != nil {

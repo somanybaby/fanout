@@ -22,6 +22,8 @@ jobs:
         with:
           go-version: '1.24'
       - run: |
+          node --check ui/legacy.js
+          node --check ui/dashboard.js
           test -z "$(gofmt -l *.go)"
           go vet ./...
           bash -n install.sh f.sh

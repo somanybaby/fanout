@@ -20,6 +20,8 @@ jobs:
           go-version: '1.24'
       - name: Format and static checks
         run: |
+          node --check ui/legacy.js
+          node --check ui/dashboard.js
           test -z "$(gofmt -l *.go)"
           go vet ./...
           bash -n install.sh f.sh

@@ -36,37 +36,30 @@ function ipTelegramRender(s,force=false){if(force||!ipTelegramDirty){$('#ip-tg-e
 function ipConnectionLabel(n){const v=n.verification||{};if(n.active_slot)return '出口 '+n.active_slot+' 使用中';if(n.blocked)return '已排除';if(v.status==='checking')return '正在核验连接';if(v.status==='pass')return v.checked_at&&Date.now()-new Date(v.checked_at)>3600000?'连接曾通过，待复查':'连接已核验';if(v.status==='failed')return '上次连接核验失败';if(v.status==='skipped')return '本轮已跳过';return n.identity.ip?'出口信息已核验':'待连接核验'}
 function ipVerificationRender(v){const s=v.state||{},running=!!s.current||(s.queue||[]).length>0;$('#ip-verify-hourly').checked=!!s.auto_hourly;$('#ip-verify-all').disabled=running;$('#ip-verify-cancel').disabled=!running;const labels={idle:'尚未开始',queued:'排队中',running:'核验中',waiting:'等待资源',finished:'本轮完成',cancelled:'本轮已停止',error:'任务暂停'};$('#ip-verify-status').textContent=(labels[s.status]||s.status||'尚未开始')+' · '+(s.completed||0)+' / '+(s.total||0)+' · 连接通过 '+(s.passed||0)+' · 失败 '+(s.failed||0)+' · 跳过 '+(s.skipped||0)+(s.current?' · 当前：'+s.current:'')+(s.auto_hourly?' · 下次调度：'+ipTime(s.next_run):'')+(s.message?' · '+s.message:'')}
 async function ipVerificationAction(body){const v=await api('/api/ip/verification',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});ipVerificationRender(v);return v}
-function ipToolsOnExits(){
- document.querySelectorAll('[data-swap]').forEach(b=>{
-  const e=view.exits.find(x=>x.slot===Number(b.dataset.swap));if(!e)return;
-  const acts=b.parentElement;if(acts.querySelector('[data-ip-open]'))return;
-  b.disabled=(e.selection||{}).mode==='strict';
-  const select=document.createElement('button');select.textContent='选 IP';select.dataset.ipOpen=e.slot;acts.prepend(select);
-  const line=document.createElement('div');line.className='ip-mini';const p=e.selection||{};
-  const info=document.createElement('span');info.className='ip-note';info.textContent=ipModeLabel(p)+(p.ip?' · '+p.ip:'')+' · 地区优先：'+(p.region||'首次连接后定位')+' · IPPure：'+ipRiskLabel(e.risk)+' · ProxyCheck：'+ipProxycheckLabel(e.proxycheck);line.append(info);
-  const rotate=document.createElement('select');rotate.setAttribute('aria-label','出口 '+e.slot+' 的定时轮换');rotate.dataset.ipRotate=e.slot;
-  [0,60,360,720,1440,2880].forEach(n=>{const o=document.createElement('option');o.value=n;o.textContent=n?'每 '+(n/60)+' 小时轮换':'关闭定时轮换';rotate.append(o)});rotate.value=p.rotate_minutes||0;rotate.disabled=p.mode==='strict';line.append(rotate);
-  const history=document.createElement('button');history.textContent='切换记录';history.dataset.ipEvents=e.slot;line.append(history);
-  if(p.country==='JP'&&p.mode==='auto'){const tokyo=document.createElement('button');tokyo.textContent='东京优先';tokyo.dataset.ipTokyo=e.slot;tokyo.disabled=p.region_code==='13';line.append(tokyo)}
-  b.closest('.exit').append(line);
- });
-}
-const ipOldRender=renderExits;renderExits=function(){ipOldRender();ipToolsOnExits()};ipToolsOnExits();
-const ipOpenButton=document.createElement('button');ipOpenButton.id='ip-open-all';ipOpenButton.textContent='IP 列表';$('#newexit').before(ipOpenButton);
+const ipOpenButton=document.createElement('button');ipOpenButton.id='ip-open-all';ipOpenButton.textContent='IP 列表';ipOpenButton.hidden=true;$('#newexit').before(ipOpenButton);
 ipOpenButton.onclick=()=>ipOpen(0);
-$('#ip-close').onclick=()=>$('#ip-browser').classList.remove('open');$('#ip-choice-close').onclick=()=>$('#ip-choice').classList.remove('open');$('#ip-history-close').onclick=()=>$('#ip-history').classList.remove('open');
+$('#ip-close').onclick=()=>uiNavigate('overview');$('#ip-choice-close').onclick=()=>$('#ip-choice').classList.remove('open');$('#ip-history-close').onclick=()=>$('#ip-history').classList.remove('open');
 document.querySelectorAll('#ip-browser,#ip-choice,#ip-history').forEach(m=>m.addEventListener('click',e=>{if(e.target===m)m.classList.remove('open')}));
 async function ipOpen(slot){
  $('#ip-target').innerHTML='<option value="0">新建出口（使用空闲位置）</option>'+view.exits.map(e=>'<option value="'+e.slot+'">出口 '+e.slot+' · '+esc(e.exit_ip||e.region)+'</option>').join('');$('#ip-target').value=slot||0;
- $('#ip-browser').classList.add('open');try{await ipLoad(true)}catch(e){$('#ip-status').textContent=e.message;}
+ uiNavigate('ips');try{await ipLoad(true)}catch(e){$('#ip-status').textContent=e.message;}
 }
 async function ipLoad(reset){
  if(ipRefreshing)return;ipRefreshing=true;$('#ip-status').textContent='读取目录与检测记录…';
- try{const all=await Promise.all([api('/api/candidates'),api('/api/ip/marks'),api('/api/ip/risk'),api('/api/ip/verification'),api('/api/ip/proxycheck'),api('/api/telegram')]);ipRows=all[0].nodes||[];ipMarks=all[1]||{};$('#ip-risk').checked=all[2].enabled;ipVerificationRender(all[3]);ipProxycheckRender(all[4]);ipTelegramRender(all[5]);
+ try{
+  const all=await Promise.allSettled([api('/api/candidates'),api('/api/ip/marks'),api('/api/ip/risk'),api('/api/ip/verification'),api('/api/ip/proxycheck'),api('/api/telegram')]);
+  if(all[0].status!=='fulfilled')throw all[0].reason;
+  const catalog=all[0].value;
+  ipRows=(catalog.nodes||[]).map(n=>Object.assign({},n,{identity:n.identity||{},quality:n.quality||{},advertised_speed_mbps:Number(n.advertised_speed_mbps)||0}));
+  if(all[1].status==='fulfilled')ipMarks=all[1].value||{};
+  if(all[2].status==='fulfilled')$('#ip-risk').checked=all[2].value.enabled;
+  if(all[3].status==='fulfilled')ipVerificationRender(all[3].value);
+  if(all[4].status==='fulfilled')ipProxycheckRender(all[4].value);
+  if(all[5].status==='fulfilled')ipTelegramRender(all[5].value);
   const prev=$('#ip-country').value;const countries=[...new Map(ipRows.map(n=>[n.country,n.country_name||n.country])).entries()].filter(x=>x[0]).sort((a,b)=>a[0]==='JP'?-1:b[0]==='JP'?1:a[0].localeCompare(b[0]));
   $('#ip-country').innerHTML='<option value="">全部国家</option>'+countries.map(c=>'<option value="'+esc(c[0])+'">'+esc(c[1])+'</option>').join('');
-  const target=view.exits.find(e=>e.slot===Number($('#ip-target').value));$('#ip-country').value=target?target.region:reset?(countries.some(c=>c[0]==='JP')?'JP':''):prev;$('#ip-country').disabled=!!target;
-  $('#ip-status').textContent=ipRows.length+' 个候选 · 目录更新：'+ipTime(all[0].fetched);ipRender();
+  const target=view.exits.find(e=>e.slot===Number($('#ip-target').value));$('#ip-country').value=target?(target.selection?.country||target.identity?.country||target.region):reset?(countries.some(c=>c[0]==='JP')?'JP':''):prev;$('#ip-country').disabled=!!target;
+  $('#ip-status').textContent=ipRows.length+' 个候选 · 目录更新：'+ipTime(catalog.fetched);ipRender();
  }finally{ipRefreshing=false}
 }
 function ipRender(){
@@ -97,7 +90,7 @@ async function ipChoose(n){
  const slot=Number($('#ip-target').value);$('#ip-template-wrap').hidden=slot>0;$('#ip-new-rotation-wrap').hidden=slot>0;if(slot===0)$('#ip-new-rotation').value=$('#ip-mode').value==='strict'?'0':'1440';
  const ibs=(view.direct||[]).concat(view.exits.flatMap(e=>e.inbounds||[]));$('#ip-template').innerHTML='<option value="0">只开出口，不创建节点链接</option>'+ibs.map(i=>'<option value="'+i.id+'">按 '+esc(i.remark||i.protocol)+' :'+i.port+' 复制节点链接</option>').join('');$('#ip-choice').classList.add('open');
 }
-$('#ip-apply').onclick=async e=>{if(!ipPicked)return;e.target.disabled=true;try{const r=await api('/api/ip/select',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({slot:Number($('#ip-target').value),host:ipPicked.host,mode:$('#ip-mode').value,ip:$('#ip-expected').value.trim(),template_id:Number($('#ip-template').value),rotate_minutes:Number($('#ip-new-rotation').value)})});$('#ip-choice').classList.remove('open');$('#ip-browser').classList.remove('open');toast('正在按规则核验出口，结果见出口和切换记录');poll()}catch(err){$('#ip-choice-error').textContent=err.message}finally{e.target.disabled=false}};
+$('#ip-apply').onclick=async e=>{if(!ipPicked)return;e.target.disabled=true;try{const r=await api('/api/ip/select',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({slot:Number($('#ip-target').value),host:ipPicked.host,mode:$('#ip-mode').value,ip:$('#ip-expected').value.trim(),template_id:Number($('#ip-template').value),rotate_minutes:Number($('#ip-new-rotation').value)})});$('#ip-choice').classList.remove('open');uiNavigate('overview');toast('正在按规则核验出口，结果见出口和切换记录');poll()}catch(err){$('#ip-choice-error').textContent=err.message}finally{e.target.disabled=false}};
 async function ipMark(ip,mark){await api('/api/ip/marks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({ip},mark))});await ipLoad(false)}
 document.addEventListener('change',async e=>{if(!e.target.dataset.ipRotate)return;const el=e.target;el.disabled=true;try{await api('/api/ip/rotation?slot='+el.dataset.ipRotate+'&minutes='+el.value,{method:'POST'});toast('轮换间隔已保存');poll()}catch(err){toast(err.message,true)}finally{el.disabled=false}});
 document.addEventListener('click',async e=>{
@@ -108,6 +101,6 @@ document.addEventListener('click',async e=>{
  const trial=e.target.closest('[data-ip-trial]');if(trial){trial.disabled=true;try{await api('/api/ip/trial',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({host:trial.dataset.ipTrial})});toast('正在临时试连，完成后会释放位置');poll()}catch(err){toast(err.message,true)}return}
  const star=e.target.closest('[data-ip-star]'),ban=e.target.closest('[data-ip-ban]'),clear=e.target.closest('[data-ip-clear]');if(star||ban||clear){try{if(clear){await ipMark(clear.dataset.ipClear,{favorite:false,blocked:false});return}const row=ipRows.find(n=>n.host===(star?star.dataset.ipStar:ban.dataset.ipBan));const ip=row.identity.ip||row.ip;if(!ip)throw new Error('该节点尚无有效 IP，请先试连');if(ban&&row.active_slot&&!row.blocked)throw new Error('此 IP 正在使用，请先选用其他 IP 或停止该出口');await ipMark(ip,{favorite:star?!row.favorite:row.favorite,blocked:ban?!row.blocked:row.blocked})}catch(err){toast(err.message,true)}return}
 });
-setInterval(()=>{if($('#ip-browser').classList.contains('open'))ipLoad(false).catch(()=>{})},10000);
+setInterval(()=>{if($('#ip-browser').classList.contains('open')&&!document.querySelector('#ip-choice.open'))ipLoad(false).catch(()=>{})},10000);
 </script>
 `

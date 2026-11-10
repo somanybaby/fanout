@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230866ee'/%3E%3Cpath d='M10 9h14M10 16h10M10 23V9' fill='none' stroke='white' stroke-width='3'/%3E%3C/svg%3E"
+    />
+    <title>Fanout · 家宽出口管理</title>
+    <!--STYLES-->
+  </head>
+  <body>
+    <a class="skip-link" href="#workspace">跳到主要内容</a>
+    <aside class="sidebar" aria-label="主导航">
+      <a
+        class="brand"
+        href="#"
+        data-page="overview"
+        aria-label="Fanout 出口管理"
+      >
+        <svg viewBox="0 0 36 40" aria-hidden="true">
+          <circle cx="7" cy="20" r="5" />
+          <circle cx="28" cy="7" r="5" />
+          <circle cx="28" cy="33" r="5" />
+          <path d="m11 17 13-8M11 23l13 8" />
+        </svg>
+        <span><strong>Fanout</strong><small>家宽出口管理</small></span>
+      </a>
+      <nav class="side-nav">
+        <button
+          data-page="overview"
+          class="nav-item active"
+          aria-current="page"
+        >
+          <svg viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M3 12h18M12 3a18 18 0 0 1 0 18 18 18 0 0 1 0-18" /></svg
+          ><span>出口管理</span>
+        </button>
+        <button data-page="ips" class="nav-item">
+          <svg viewBox="0 0 24 24">
+            <ellipse cx="12" cy="5" rx="8" ry="3" />
+            <path d="M4 5v7c0 4 16 4 16 0V5M4 12v7c0 4 16 4 16 0v-7" /></svg
+          ><span>IP 候选库</span>
+        </button>
+        <button data-page="automation" class="nav-item">
+          <svg viewBox="0 0 24 24">
+            <path
+              d="M20 8a9 9 0 0 0-15-3L3 8m0-5v5h5M4 16a9 9 0 0 0 15 3l2-3m0 5v-5h-5"
+            /></svg
+          ><span>轮换与检测</span>
+        </button>
+        <button data-page="notifications" class="nav-item">
+          <svg viewBox="0 0 24 24">
+            <path d="m3 10 18-7-5 18-5-7-8-4Zm8 4 10-11" /></svg
+          ><span>Telegram 通知</span>
+        </button>
+        <button id="settingsBtn" class="nav-item">
+          <svg viewBox="0 0 24 24">
+            <path d="m9 3-1 3-3 1-2 5 2 5 3 1 1 3h6l1-3 3-1 2-5-2-5-3-1-1-3Z" />
+            <circle cx="12" cy="12" r="3" /></svg
+          ><span>设置</span>
+        </button>
+      </nav>
+      <div class="sidebar-bottom">
+        <span class="service-state" id="service-state"
+          ><i></i><span>正在连接服务…</span></span
+        ><span id="panel" class="backend-caption"></span
+        ><a
+          href="https://github.com/somanybaby/fanout"
+          target="_blank"
+          rel="noopener"
+          >项目与更新 ↗</a
+        >
+      </div>
+    </aside>
+    <main class="app-main" id="workspace" tabindex="-1">
+      <header class="page-header">
+        <div>
+          <h1 id="page-title">出口管理</h1>
+          <p id="page-description">查看出口状态，管理节点连接与 IP 轮换</p>
+        </div>
+        <button class="primary" id="newexit">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>新建出口
+        </button>
+      </header>
+      <div
+        id="connection-banner"
+        class="connection-banner"
+        role="status"
+        hidden
+      ></div>
+      <section
+        id="overview"
+        class="workspace-page open"
+        aria-labelledby="page-title"
+      >
+        <div class="status-strip" aria-live="polite">
+          <span id="online-summary"
+            ><i class="status-dot"></i>正在读取出口…</span
+          ><span id="rotation-summary">轮换规则读取中</span
+          ><span id="check-summary">连接检查读取中</span>
+        </div>
+        <div class="jobs" id="jobs"></div>
+        <div id="list">
+          <div class="loading-state">正在加载出口，请稍候…</div>
+        </div>
+        <div class="utility-bar">
+          <span class="section-caption"
+            >节点与订阅 <span id="ecount" class="count"></span></span
+          ><span class="spacer"></span><button id="subBtn">订阅地址</button
+          ><button id="exportAll">导出全部节点</button
+          ><button id="newnode">新建节点</button>
+          <details class="exit-menu">
+            <summary>更多 <span aria-hidden="true">⌄</span></summary>
+            <div class="menu-items">
+              <button id="stopall" class="danger">停止全部出口</button>
+            </div>
+          </details>
+        </div>
+        <section class="activity-panel" aria-labelledby="activity-title">
+          <div class="section-heading">
+            <h2 id="activity-title">最近动态</h2>
+            <button class="text-button" data-all-events>
+              查看全部 <span aria-hidden="true">›</span>
+            </button>
+          </div>
+          <div id="recent-events"><p class="muted">正在读取动态…</p></div>
+        </section>
+        <details class="direct-section">
+          <summary>
+            直连与未绑定节点 <span class="muted">查看独立管理的节点</span>
+          </summary>
+          <div id="orphans"></div>
+        </details>
+      </section>
+      <section id="automation" class="workspace-page">
+        <div class="page-intro">
+          <h2>按规则轮换，故障时自动接替</h2>
+          <p>
+            优先寻找同地区出口，再尝试同国备用。连接正常时按计划轮换；没有合格候选时会延后。
+          </p>
+        </div>
+        <div id="rotation-settings" class="settings-card"></div>
+        <div id="risk-settings"></div>
+        <div id="verification-settings"></div>
+        <div id="proxycheck-settings"></div>
+      </section>
+      <section id="notifications" class="workspace-page">
+        <div class="page-intro">
+          <h2>出口变化，及时收到通知</h2>
+          <p>
+            成功更换出口后通知原 IP、新
+            IP、风险分和下次计划轮换时间。失败切换和候选试连不会发送换 IP 通知。
+          </p>
+        </div>
+        <div id="telegram-settings"></div>
+      </section>
+      <footer class="app-footer">
+        <span>风险以 IPPure 为准，ProxyCheck 仅供参考</span
+        ><span
+          >Fanout · 界面 v1.8.0 ·
+          <a
+            href="https://github.com/somanybaby/fanout/blob/main/UPSTREAM.md"
+            target="_blank"
+            rel="noopener"
+            >源自 byJoey</a
+          ></span
+        >
+      </footer>
+    </main>
+    <!--MODALS-->
+    <!--SCRIPTS-->
+  </body>
+</html>
